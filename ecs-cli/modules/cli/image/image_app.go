@@ -21,7 +21,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	ecrclient "github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/ecr"
 	stsclient "github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/sts"
 	dockerclient "github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/docker"
@@ -31,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecr"
 	units "github.com/docker/go-units"
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
@@ -56,7 +56,7 @@ func ImagePush(c *cli.Context) {
 		logrus.Fatal("Error executing 'push': ", err)
 	}
 
-	ecsParams, err := config.NewCLIParams(c, rdwr)
+	commandConfig, err := config.NewCommandConfig(c, rdwr)
 	if err != nil {
 		logrus.Fatal("Error executing 'push': ", err)
 	}
@@ -65,8 +65,8 @@ func ImagePush(c *cli.Context) {
 	if err != nil {
 		logrus.Fatal("Error executing 'push': ", err)
 	}
-	ecrClient := ecrclient.NewClient(ecsParams)
-	stsClient := stsclient.NewClient(ecsParams)
+	ecrClient := ecrclient.NewClient(commandConfig)
+	stsClient := stsclient.NewClient(commandConfig)
 
 	if err := pushImage(c, rdwr, dockerClient, ecrClient, stsClient); err != nil {
 		logrus.Fatal("Error executing 'push': ", err)
@@ -80,7 +80,7 @@ func ImagePull(c *cli.Context) {
 		logrus.Fatal("Error executing 'pull': ", err)
 	}
 
-	ecsParams, err := config.NewCLIParams(c, rdwr)
+	commandConfig, err := config.NewCommandConfig(c, rdwr)
 	if err != nil {
 		logrus.Fatal("Error executing 'pull': ", err)
 	}
@@ -89,8 +89,8 @@ func ImagePull(c *cli.Context) {
 	if err != nil {
 		logrus.Fatal("Error executing 'pull': ", err)
 	}
-	ecrClient := ecrclient.NewClient(ecsParams)
-	stsClient := stsclient.NewClient(ecsParams)
+	ecrClient := ecrclient.NewClient(commandConfig)
+	stsClient := stsclient.NewClient(commandConfig)
 
 	if err := pullImage(c, rdwr, dockerClient, ecrClient, stsClient); err != nil {
 		logrus.Fatal("Error executing 'pull': ", err)
@@ -104,12 +104,12 @@ func ImageList(c *cli.Context) {
 		logrus.Fatal("Error executing 'images': ", err)
 	}
 
-	ecsParams, err := config.NewCLIParams(c, rdwr)
+	commandConfig, err := config.NewCommandConfig(c, rdwr)
 	if err != nil {
 		logrus.Fatal("Error executing 'images': ", err)
 	}
 
-	ecrClient := ecrclient.NewClient(ecsParams)
+	ecrClient := ecrclient.NewClient(commandConfig)
 	if err := getImages(c, rdwr, ecrClient); err != nil {
 		logrus.Fatal("Error executing 'images': ", err)
 		return
@@ -301,7 +301,7 @@ func splitImageName(image string, seperatorRegExp string,
 	format string) (registry string, repository string, tag string, err error) {
 
 	re := regexp.MustCompile(
-		`^(?:([0-9A-Za-z.\-]+)/)?` + // repository uri (Optional)
+		`^(?:((?:[a-zA-Z0-9][a-zA-Z0-9-_]*)\.dkr\.ecr\.[a-zA-Z0-9\-_]+\.amazonaws\.com(?:\.cn)?)/)?` + // repository uri (Optional)
 			`([0-9a-z\-_/]+)` + // repository
 			`(?:` + seperatorRegExp + `([0-9A-Za-z_.\-:]+))?$`) // tag (Optional)
 	matches := re.FindStringSubmatch(image)

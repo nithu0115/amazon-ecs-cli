@@ -16,6 +16,7 @@ package service
 import (
 	"flag"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/context"
@@ -31,6 +32,14 @@ import (
 	"github.com/urfave/cli"
 )
 
+const (
+	arnPrefix = "arn:aws:ecs:us-west-2:accountId:task-definition/"
+)
+
+//////////////////////////
+// Create Service tests //
+/////////////////////////
+
 func TestCreateWithDeploymentConfig(t *testing.T) {
 	deploymentMaxPercent := 200
 	deploymentMinPercent := 100
@@ -38,52 +47,32 @@ func TestCreateWithDeploymentConfig(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.String(flags.DeploymentMaxPercentFlag, strconv.Itoa(deploymentMaxPercent), "")
 	flagSet.String(flags.DeploymentMinHealthyPercentFlag, strconv.Itoa(deploymentMinPercent), "")
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Equal(t, int64(deploymentMaxPercent), aws.Int64Value(deploymentConfig.MaximumPercent), "DeploymentConfig.MaxPercent should match")
-			assert.Equal(t, int64(deploymentMinPercent), aws.Int64Value(deploymentConfig.MinimumHealthyPercent), "DeploymentConfig.MinimumHealthyPercent should match")
-		},
-		func(loadBalancer *ecs.LoadBalancer, role string) {
-			assert.Nil(t, loadBalancer, "LoadBalancer should be nil")
-			assert.Empty(t, role, "Role should be empty")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
+		func(input *ecs.CreateServiceInput) {
+			actual := input.DeploymentConfiguration
+			assert.Equal(t, int64(deploymentMaxPercent), aws.Int64Value(actual.MaximumPercent), "DeploymentConfig.MaxPercent should match")
+			assert.Equal(t, int64(deploymentMinPercent), aws.Int64Value(actual.MinimumHealthyPercent), "DeploymentConfig.MinimumHealthyPercent should match")
 		},
 	)
 }
 
 func TestCreateWithoutDeploymentConfig(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, role string) {
-			assert.Nil(t, loadBalancer, "LoadBalancer should be nil")
-			assert.Empty(t, role, "Role should be empty")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
+		func(input *ecs.CreateServiceInput) {
+			actual := input.DeploymentConfiguration
+			assert.Nil(t, actual.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
+			assert.Nil(t, actual.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
 		},
 	)
 }
@@ -105,25 +94,17 @@ func ecsParamsWithNetworkConfig() *utils.ECSParams {
 
 func TestCreateWithNetworkConfig(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		ecsParamsWithNetworkConfig(),
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, role string) {
-			assert.Nil(t, loadBalancer, "LoadBalancer should be nil")
-			assert.Empty(t, role, "Role should be empty")
-		},
-		func(launchType string) {
+		func(input *ecs.CreateServiceInput) {
+			launchType := input.LaunchType
 			assert.NotEqual(t, "FARGATE", launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
+
+			networkConfig := input.NetworkConfiguration
 			assert.NotNil(t, networkConfig, "NetworkConfiguration should not be nil")
 			assert.Equal(t, 2, len(networkConfig.AwsvpcConfiguration.Subnets))
 			assert.Nil(t, networkConfig.AwsvpcConfiguration.AssignPublicIp)
@@ -154,25 +135,17 @@ func ecsParamsWithFargateNetworkConfig() *utils.ECSParams {
 
 func TestCreateFargate(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{LaunchType: "FARGATE"},
+		flagSet,
+		&config.CommandConfig{LaunchType: "FARGATE"},
 		ecsParamsWithFargateNetworkConfig(),
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, role string) {
-			assert.Nil(t, loadBalancer, "LoadBalancer should be nil")
-			assert.Empty(t, role, "Role should be empty")
-		},
-		func(launchType string) {
-			assert.Equal(t, "FARGATE", launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
+		func(input *ecs.CreateServiceInput) {
+			launchType := input.LaunchType
+			assert.Equal(t, "FARGATE", aws.StringValue(launchType))
+
+			networkConfig := input.NetworkConfiguration
 			assert.NotNil(t, networkConfig, "NetworkConfiguration should not be nil")
 			assert.Equal(t, 2, len(networkConfig.AwsvpcConfiguration.Subnets))
 			assert.Equal(t, string(utils.Enabled), aws.StringValue(networkConfig.AwsvpcConfiguration.AssignPublicIp))
@@ -207,11 +180,11 @@ func TestCreateFargateNetworkModeNotAWSVPC(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	cliContext := cli.NewContext(nil, flagSet, nil)
 
-	context := &context.Context{
-		ECSClient:  mockEcs,
-		CLIParams:  &config.CLIParams{LaunchType: "FARGATE"},
-		CLIContext: cliContext,
-		ECSParams:  &utils.ECSParams{},
+	context := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: &config.CommandConfig{LaunchType: "FARGATE"},
+		CLIContext:    cliContext,
+		ECSParams:     &utils.ECSParams{},
 	}
 
 	service := NewService(context)
@@ -225,31 +198,86 @@ func TestCreateFargateNetworkModeNotAWSVPC(t *testing.T) {
 
 func TestCreateEC2Explicitly(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{LaunchType: "EC2"},
+		flagSet,
+		&config.CommandConfig{LaunchType: "EC2"},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, role string) {
-			assert.Nil(t, loadBalancer, "LoadBalancer should be nil")
-			assert.Empty(t, role, "Role should be empty")
-		},
-		func(launchType string) {
-			assert.Equal(t, "EC2", launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
+		func(input *ecs.CreateServiceInput) {
+			launchType := input.LaunchType
+			assert.Equal(t, "EC2", aws.StringValue(launchType))
+
+			networkConfig := input.NetworkConfiguration
 			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
 		},
 	)
 }
 
-// Specifies TargeGroupArn to test ALB
+func TestCreateWithTaskPlacement(t *testing.T) {
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		ecsParamsWithTaskPlacement(),
+		func(input *ecs.CreateServiceInput) {
+			placementConstraints := input.PlacementConstraints
+			placementStrategy := input.PlacementStrategy
+			expectedConstraints := []*ecs.PlacementConstraint{
+				{
+					Type: aws.String("distinctInstance"),
+				}, {
+					Expression: aws.String("attribute:ecs.instance-type =~ t2.*"),
+					Type:       aws.String("memberOf"),
+				},
+			}
+			expectedStrategy := []*ecs.PlacementStrategy{
+				{
+					Type: aws.String("random"),
+				}, {
+					Field: aws.String("instanceId"),
+					Type:  aws.String("binpack"),
+				},
+			}
+
+			assert.Len(t, placementConstraints, 2)
+			assert.Equal(t, expectedConstraints, placementConstraints, "Expected Placement Constraints to match")
+			assert.Len(t, placementStrategy, 2)
+			assert.Equal(t, expectedStrategy, placementStrategy, "Expected Placement Strategy to match")
+		},
+	)
+}
+
+func ecsParamsWithTaskPlacement() *utils.ECSParams {
+	return &utils.ECSParams{
+		RunParams: utils.RunParams{
+			TaskPlacement: utils.TaskPlacement{
+				Constraints: []utils.Constraint{
+					utils.Constraint{
+						Type: ecs.PlacementConstraintTypeDistinctInstance,
+					},
+					utils.Constraint{
+						Expression: "attribute:ecs.instance-type =~ t2.*",
+						Type:       ecs.PlacementConstraintTypeMemberOf,
+					},
+				},
+				Strategies: []utils.Strategy{
+					utils.Strategy{
+						Type: ecs.PlacementStrategyTypeRandom,
+					},
+					utils.Strategy{
+						Field: "instanceId",
+						Type:  ecs.PlacementStrategyTypeBinpack,
+					},
+				},
+			},
+		},
+	}
+}
+
+// Specifies TargetGroupArn to test ALB
 func TestCreateWithALB(t *testing.T) {
 	targetGroupArn := "targetGroupArn"
 	containerName := "containerName"
@@ -262,30 +290,21 @@ func TestCreateWithALB(t *testing.T) {
 	flagSet.String(flags.ContainerPortFlag, strconv.Itoa(containerPort), "")
 	flagSet.String(flags.RoleFlag, role, "")
 
-	cliContext := cli.NewContext(nil, flagSet, nil)
-
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, observedRole string) {
+		func(input *ecs.CreateServiceInput) {
+			loadBalancer := input.LoadBalancers[0]
+			observedRole := input.Role
+
 			assert.NotNil(t, loadBalancer, "LoadBalancer should not be nil")
 			assert.Nil(t, loadBalancer.LoadBalancerName, "LoadBalancer.LoadBalancerName should be nil")
 			assert.Equal(t, targetGroupArn, aws.StringValue(loadBalancer.TargetGroupArn), "LoadBalancer.TargetGroupArn should match")
 			assert.Equal(t, containerName, aws.StringValue(loadBalancer.ContainerName), "LoadBalancer.ContainerName should match")
 			assert.Equal(t, int64(containerPort), aws.Int64Value(loadBalancer.ContainerPort), "LoadBalancer.ContainerPort should match")
-			assert.Equal(t, role, observedRole, "Role should match")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
+			assert.Equal(t, role, aws.StringValue(observedRole), "Role should match")
 		},
 	)
 }
@@ -304,32 +323,22 @@ func TestCreateWithHealthCheckGracePeriodAndALB(t *testing.T) {
 	flagSet.String(flags.RoleFlag, role, "")
 	flagSet.String(flags.HealthCheckGracePeriodFlag, strconv.Itoa(healthCheckGP), "")
 
-	cliContext := cli.NewContext(nil, flagSet, nil)
-
-	createServiceWithHealthCheckGPTest(
+	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, observedRole string) {
+		func(input *ecs.CreateServiceInput) {
+			loadBalancer := input.LoadBalancers[0]
+			observedRole := input.Role
+			healthCheckGracePeriod := input.HealthCheckGracePeriodSeconds
+
 			assert.NotNil(t, loadBalancer, "LoadBalancer should not be nil")
 			assert.Nil(t, loadBalancer.LoadBalancerName, "LoadBalancer.LoadBalancerName should be nil")
 			assert.Equal(t, targetGroupArn, aws.StringValue(loadBalancer.TargetGroupArn), "LoadBalancer.TargetGroupArn should match")
 			assert.Equal(t, containerName, aws.StringValue(loadBalancer.ContainerName), "LoadBalancer.ContainerName should match")
 			assert.Equal(t, int64(containerPort), aws.Int64Value(loadBalancer.ContainerPort), "LoadBalancer.ContainerPort should match")
-			assert.Equal(t, role, observedRole, "Role should match")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
-		},
-		func(healthCheckGracePeriod *int64) {
+			assert.Equal(t, role, aws.StringValue(observedRole), "Role should match")
 			assert.Equal(t, int64(healthCheckGP), *healthCheckGracePeriod, "HealthCheckGracePeriod should match")
 		},
 	)
@@ -348,30 +357,21 @@ func TestCreateWithELB(t *testing.T) {
 	flagSet.String(flags.ContainerPortFlag, strconv.Itoa(containerPort), "")
 	flagSet.String(flags.RoleFlag, role, "")
 
-	cliContext := cli.NewContext(nil, flagSet, nil)
-
 	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, observedRole string) {
+		func(input *ecs.CreateServiceInput) {
+			loadBalancer := input.LoadBalancers[0]
+			observedRole := input.Role
+
 			assert.NotNil(t, loadBalancer, "LoadBalancer should not be nil")
 			assert.Nil(t, loadBalancer.TargetGroupArn, "LoadBalancer.TargetGroupArn should be nil")
 			assert.Equal(t, loadbalancerName, aws.StringValue(loadBalancer.LoadBalancerName), "LoadBalancer.LoadBalancerName should match")
 			assert.Equal(t, containerName, aws.StringValue(loadBalancer.ContainerName), "LoadBalancer.ContainerName should match")
 			assert.Equal(t, int64(containerPort), aws.Int64Value(loadBalancer.ContainerPort), "LoadBalancer.ContainerPort should match")
-			assert.Equal(t, role, observedRole, "Role should match")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
+			assert.Equal(t, role, aws.StringValue(observedRole), "Role should match")
 		},
 	)
 }
@@ -390,76 +390,191 @@ func TestCreateWithHealthCheckGracePeriodAndELB(t *testing.T) {
 	flagSet.String(flags.RoleFlag, role, "")
 	flagSet.String(flags.HealthCheckGracePeriodFlag, strconv.Itoa(healthCheckGP), "")
 
-	cliContext := cli.NewContext(nil, flagSet, nil)
-
-	createServiceWithHealthCheckGPTest(
+	createServiceTest(
 		t,
-		cliContext,
-		&config.CLIParams{},
+		flagSet,
+		&config.CommandConfig{},
 		&utils.ECSParams{},
-		func(deploymentConfig *ecs.DeploymentConfiguration) {
-			assert.Nil(t, deploymentConfig.MaximumPercent, "DeploymentConfig.MaximumPercent should be nil")
-			assert.Nil(t, deploymentConfig.MinimumHealthyPercent, "DeploymentConfig.MinimumHealthyPercent should be nil")
-		},
-		func(loadBalancer *ecs.LoadBalancer, observedRole string) {
+		func(input *ecs.CreateServiceInput) {
+			loadBalancer := input.LoadBalancers[0]
+			observedRole := input.Role
+			healthCheckGracePeriod := input.HealthCheckGracePeriodSeconds
+
 			assert.NotNil(t, loadBalancer, "LoadBalancer should not be nil")
 			assert.Nil(t, loadBalancer.TargetGroupArn, "LoadBalancer.TargetGroupArn should be nil")
 			assert.Equal(t, loadbalancerName, aws.StringValue(loadBalancer.LoadBalancerName), "LoadBalancer.LoadBalancerName should match")
 			assert.Equal(t, containerName, aws.StringValue(loadBalancer.ContainerName), "LoadBalancer.ContainerName should match")
 			assert.Equal(t, int64(containerPort), aws.Int64Value(loadBalancer.ContainerPort), "LoadBalancer.ContainerPort should match")
-			assert.Equal(t, role, observedRole, "Role should match")
-		},
-		func(launchType string) {
-			assert.Empty(t, launchType)
-		},
-		func(networkConfig *ecs.NetworkConfiguration) {
-			assert.Nil(t, networkConfig, "NetworkConfiguration should be nil")
-		},
-		func(healthCheckGracePeriod *int64) {
+			assert.Equal(t, role, aws.StringValue(observedRole), "Role should match")
 			assert.Equal(t, int64(healthCheckGP), *healthCheckGracePeriod, "HealthCheckGracePeriod should match")
 		},
 	)
 }
 
-type validateDeploymentConfiguration func(*ecs.DeploymentConfiguration)
-type validateLoadBalancer func(*ecs.LoadBalancer, string)
-type validateLaunchType func(string)
-type validateNetworkConfig func(*ecs.NetworkConfiguration)
-type validateHealthCheckGracePeriod func(*int64)
+func TestDelayedServiceCreate(t *testing.T) {
+	// define test flag set
+	timeoutFlagValue := 1
 
-func createServiceTest(t *testing.T,
-	cliContext *cli.Context,
-	cliParams *config.CLIParams,
-	ecsParams *utils.ECSParams,
-	validateDeploymentConfig validateDeploymentConfiguration,
-	validateLB validateLoadBalancer,
-	validateLT validateLaunchType,
-	validateNC validateNetworkConfig) {
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.ComposeServiceTimeOutFlag, strconv.Itoa(timeoutFlagValue), "")
+	cliContext := cli.NewContext(nil, flagSet, nil)
 
-	createServiceWithHealthCheckGPTest(
+	// call tests
+	createNewServiceWithDelay(t, cliContext, &config.CommandConfig{}, &utils.ECSParams{})
+}
+
+func TestCreateWithServiceDiscovery(t *testing.T) {
+	sdsARN := "arn:aws:servicediscovery:eu-west-1:11111111111:service/srv-clydelovespudding"
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.Bool(flags.EnableServiceDiscoveryFlag, true, "")
+
+	// Reset mockable function after test
+	nonMockedServicediscoveryCreate := servicediscoveryCreate
+	defer func() { servicediscoveryCreate = nonMockedServicediscoveryCreate }()
+
+	servicediscoveryCreate = func(networkMode, serviceName string, c *context.ECSContext) (*ecs.ServiceRegistry, error) {
+		return &ecs.ServiceRegistry{
+			RegistryArn: aws.String(sdsARN),
+		}, nil
+	}
+
+	createServiceTest(
 		t,
-		cliContext,
-		cliParams,
-		ecsParams,
-		validateDeploymentConfig,
-		validateLB,
-		validateLT,
-		validateNC,
-		func(healthCheckGP *int64) {
-			assert.Nil(t, healthCheckGP, "HealthCheckGracePeriod should be nil")
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actualServiceRegistries := input.ServiceRegistries
+			assert.Len(t, actualServiceRegistries, 1, "Expected a single Service Registry")
+			assert.Equal(t, sdsARN, aws.StringValue(actualServiceRegistries[0].RegistryArn), "Service Registry should match")
 		},
 	)
 }
 
-func createServiceWithHealthCheckGPTest(t *testing.T,
-	cliContext *cli.Context,
-	cliParams *config.CLIParams,
+func TestCreateWithServiceDiscoveryWithContainerNameAndPort(t *testing.T) {
+	sdsARN := "arn:aws:servicediscovery:eu-west-1:11111111111:service/srv-clydelovespudding"
+	containerName := "nginx"
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.Bool(flags.EnableServiceDiscoveryFlag, true, "")
+
+	// Reset mockable function after test
+	nonMockedServicediscoveryCreate := servicediscoveryCreate
+	defer func() { servicediscoveryCreate = nonMockedServicediscoveryCreate }()
+
+	servicediscoveryCreate = func(networkMode, serviceName string, c *context.ECSContext) (*ecs.ServiceRegistry, error) {
+		return &ecs.ServiceRegistry{
+			RegistryArn:   aws.String(sdsARN),
+			ContainerName: aws.String(containerName),
+			ContainerPort: aws.Int64(80),
+		}, nil
+	}
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actualServiceRegistries := input.ServiceRegistries
+			assert.Len(t, actualServiceRegistries, 1, "Expected a single Service Registry")
+			assert.Equal(t, int64(80), aws.Int64Value(actualServiceRegistries[0].ContainerPort), "Expected container port to be 80")
+			assert.Equal(t, containerName, aws.StringValue(actualServiceRegistries[0].ContainerName), "Expected ContainerName to match")
+			assert.Equal(t, sdsARN, aws.StringValue(actualServiceRegistries[0].RegistryArn), "Service Registry should match")
+		},
+	)
+}
+
+func TestCreateWithSchedulingStrategyWithDaemon(t *testing.T) {
+	schedulingStrategy := ecs.SchedulingStrategyDaemon
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.SchedulingStrategyFlag, schedulingStrategy, "")
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actual := input
+			assert.NotNil(t, actual.SchedulingStrategy, "SchedulingStrategy should not be nil")
+			assert.Equal(t, schedulingStrategy, aws.StringValue(actual.SchedulingStrategy), "SchedulingStrategy should match")
+			assert.Nil(t, actual.DesiredCount, "DesiredCount should be nil")
+		},
+	)
+}
+
+func TestCreateWithSchedulingStrategyWithReplica(t *testing.T) {
+	schedulingStrategy := ecs.SchedulingStrategyReplica
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.SchedulingStrategyFlag, schedulingStrategy, "")
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actual := input
+			assert.NotNil(t, actual.SchedulingStrategy, "SchedulingStrategy should not be nil")
+			assert.Equal(t, schedulingStrategy, aws.StringValue(actual.SchedulingStrategy), "SchedulingStrategy should match")
+			assert.NotNil(t, actual.DesiredCount, "DesiredCount should not be nil")
+			assert.Equal(t, int64(0), aws.Int64Value(actual.DesiredCount), "DesiredCount should be zero")
+		},
+	)
+}
+
+func TestCreateWithSchedulingStrategyWithReplicaLowercase(t *testing.T) {
+	schedulingStrategy := ecs.SchedulingStrategyReplica
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.SchedulingStrategyFlag, strings.ToLower(schedulingStrategy), "")
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actual := input
+			assert.NotNil(t, actual.SchedulingStrategy, "SchedulingStrategy should not be nil")
+			assert.Equal(t, schedulingStrategy, aws.StringValue(actual.SchedulingStrategy), "SchedulingStrategy should match")
+			assert.NotNil(t, actual.DesiredCount, "DesiredCount should not be nil")
+			assert.Equal(t, int64(0), aws.Int64Value(actual.DesiredCount), "DesiredCount should be zero")
+		},
+	)
+}
+
+func TestCreateWithoutSchedulingStrategy(t *testing.T) {
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+
+	createServiceTest(
+		t,
+		flagSet,
+		&config.CommandConfig{},
+		&utils.ECSParams{},
+		func(input *ecs.CreateServiceInput) {
+			actual := input
+			assert.Nil(t, actual.SchedulingStrategy, "SchedulingStrategy should be nil")
+			assert.NotNil(t, actual.DesiredCount, "DesiredCount should not be nil")
+			assert.Equal(t, int64(0), aws.Int64Value(actual.DesiredCount), "DesiredCount should be zero")
+		},
+	)
+}
+
+//////////////////////////////////////
+// Helpers for CreateService tests //
+/////////////////////////////////////
+type validateCreateServiceInputField func(*ecs.CreateServiceInput)
+
+func createServiceTest(t *testing.T,
+	flagSet *flag.FlagSet,
+	commandConfig *config.CommandConfig,
 	ecsParams *utils.ECSParams,
-	validateDeploymentConfig validateDeploymentConfiguration,
-	validateLB validateLoadBalancer,
-	validateLT validateLaunchType,
-	validateNC validateNetworkConfig,
-	validateHCGP validateHealthCheckGracePeriod) {
+	validateInput validateCreateServiceInputField) {
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -467,51 +582,30 @@ func createServiceWithHealthCheckGPTest(t *testing.T,
 	taskDefID := "taskDefinitionId"
 	taskDefArn, taskDefinition, registerTaskDefResponse := getTestTaskDef(taskDefID)
 
+	// Mock ECS calls
 	mockEcs := mock_ecs.NewMockECSClient(ctrl)
 	gomock.InOrder(
-		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(gomock.Any(), gomock.Any()).Do(func(x, y interface{}) {
-			// verify input fields
-			req := x.(*ecs.RegisterTaskDefinitionInput)
-			assert.Equal(t, aws.StringValue(taskDefinition.Family), aws.StringValue(req.Family), "Task Definition family should match")
+		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(
+			gomock.Any(), // RegisterTaskDefinitionInput
+			gomock.Any(), // taskDefinitionCache
+		).Do(func(input, cache interface{}) {
+			verifyTaskDefinitionInput(t, taskDefinition, input.(*ecs.RegisterTaskDefinitionInput))
 		}).Return(&registerTaskDefResponse, nil),
 
 		mockEcs.EXPECT().CreateService(
-			gomock.Any(), // serviceName
-			gomock.Any(), // taskDefName
-			gomock.Any(), // loadBalancer
-			gomock.Any(), // role
-			gomock.Any(), // deploymentConfig
-			gomock.Any(), // networkConfig
-			gomock.Any(), // launchType
-			gomock.Any(), // healthCheckGracePeriod
-		).Do(func(a, b, c, d, e, f, g, h interface{}) {
-			observedTaskDefID := b.(string)
-			assert.Equal(t, taskDefID, observedTaskDefID, "Task Definition name should match")
-
-			observedLB := c.(*ecs.LoadBalancer)
-			observedRole := d.(string)
-			validateLB(observedLB, observedRole)
-
-			observedDeploymentConfig := e.(*ecs.DeploymentConfiguration)
-			validateDeploymentConfig(observedDeploymentConfig)
-
-			observedLaunchType := g.(string)
-			validateLT(observedLaunchType)
-
-			observedNetworkConfig := f.(*ecs.NetworkConfiguration)
-			validateNC(observedNetworkConfig)
-
-			observedHealthCheckGracePeriod := h.(*int64)
-			validateHCGP(observedHealthCheckGracePeriod)
-
+			gomock.Any(), // createServiceInput
+		).Do(func(input interface{}) {
+			req := input.(*ecs.CreateServiceInput)
+			validateInput(req) // core test assertion
 		}).Return(nil),
 	)
 
-	context := &context.Context{
-		ECSClient:  mockEcs,
-		CLIParams:  cliParams,
-		CLIContext: cliContext,
-		ECSParams:  ecsParams,
+	cliContext := cli.NewContext(nil, flagSet, nil)
+	context := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: commandConfig,
+		CLIContext:    cliContext,
+		ECSParams:     ecsParams,
 	}
 
 	service := NewService(context)
@@ -526,6 +620,86 @@ func createServiceWithHealthCheckGPTest(t *testing.T,
 	assert.Equal(t, taskDefArn, aws.StringValue(service.TaskDefinition().TaskDefinitionArn), "TaskDefArn should match")
 }
 
+// helper for createNewServiceWithDelay
+func getCreateServiceWithDelayMockClient(t *testing.T,
+	ctrl *gomock.Controller,
+	taskDefinition ecs.TaskDefinition,
+	taskDefID string,
+	registerTaskDefResponse ecs.TaskDefinition) *mock_ecs.MockECSClient {
+
+	mockEcs := mock_ecs.NewMockECSClient(ctrl)
+
+	createdService := &ecs.Service{
+		TaskDefinition: aws.String("arn/" + taskDefID),
+		Status:         aws.String("ACTIVE"),
+		DesiredCount:   aws.Int64(0),
+		RunningCount:   aws.Int64(0),
+		ServiceName:    aws.String("test-created"),
+	}
+	updatedService := *createdService
+	gomock.InOrder(
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(getDescribeServiceTestResponse(nil), nil),
+
+		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(
+			gomock.Any(), // RegisterTaskDefinitionInput
+			gomock.Any(), // taskDefinitionCache
+		).Do(func(input, cache interface{}) {
+			verifyTaskDefinitionInput(t, taskDefinition, input.(*ecs.RegisterTaskDefinitionInput))
+		}).Return(&registerTaskDefResponse, nil),
+
+		mockEcs.EXPECT().CreateService(
+			gomock.Any(), // createServiceInput
+		).Do(func(input interface{}) {
+			req := input.(*ecs.CreateServiceInput)
+			observedTaskDefID := req.TaskDefinition
+			assert.Equal(t, taskDefID, aws.StringValue(observedTaskDefID), "Task Definition name should match")
+		}).Return(nil),
+
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(getDescribeServiceTestResponse(nil), nil),
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(getDescribeServiceTestResponse(createdService), nil).MaxTimes(2),
+		mockEcs.EXPECT().UpdateService(
+			gomock.Any(), // updateServiceInput
+		).Return(nil),
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(getDescribeServiceTestResponse(updatedService.SetDeployments([]*ecs.Deployment{&ecs.Deployment{}}).SetDesiredCount(1).SetRunningCount(1)), nil),
+	)
+	return mockEcs
+}
+
+func createNewServiceWithDelay(t *testing.T,
+	cliContext *cli.Context,
+	commandConfig *config.CommandConfig,
+	ecsParams *utils.ECSParams) {
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	taskDefID := "newTaskDefinitionId"
+	taskDefArn, taskDefinition, registerTaskDefResponse := getTestTaskDef(taskDefID)
+
+	mockEcs := getCreateServiceWithDelayMockClient(t, ctrl, taskDefinition, taskDefID, registerTaskDefResponse)
+
+	ecsContext := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: commandConfig,
+		CLIContext:    cliContext,
+		ECSParams:     ecsParams,
+	}
+	ecsContext.SetProjectName()
+	service := NewService(ecsContext)
+	err := service.LoadContext()
+	assert.NoError(t, err, "Unexpected error while loading context in update service with new task def test")
+
+	service.SetTaskDefinition(&taskDefinition)
+	err = service.Up()
+	assert.NoError(t, err, "Unexpected error on service up with new task def")
+
+	// task definition should be set
+	assert.Equal(t, taskDefArn, aws.StringValue(service.TaskDefinition().TaskDefinitionArn), "TaskDefArn should match")
+}
+
+////////////////////////
+// LoadContext tests //
+///////////////////////
 func TestLoadContext(t *testing.T) {
 	deploymentMaxPercent := 150
 
@@ -533,7 +707,7 @@ func TestLoadContext(t *testing.T) {
 	flagSet.String(flags.DeploymentMaxPercentFlag, strconv.Itoa(deploymentMaxPercent), "")
 	cliContext := cli.NewContext(nil, flagSet, nil)
 	service := &Service{
-		projectContext: &context.Context{CLIContext: cliContext},
+		ecsContext: &context.ECSContext{CLIContext: cliContext},
 	}
 
 	err := service.LoadContext()
@@ -546,7 +720,6 @@ func TestLoadContext(t *testing.T) {
 		"DeploymentConfig.MaxPercent should match")
 	assert.Nil(t, observedDeploymentConfig.MinimumHealthyPercent,
 		"DeploymentConfig.MinimumHealthyPercent should be nil")
-
 }
 
 func TestLoadContextForIncorrectInput(t *testing.T) {
@@ -556,7 +729,7 @@ func TestLoadContextForIncorrectInput(t *testing.T) {
 	flagSet.String(flags.DeploymentMaxPercentFlag, deploymentMaxPercent, "")
 	cliContext := cli.NewContext(nil, flagSet, nil)
 	service := &Service{
-		projectContext: &context.Context{CLIContext: cliContext},
+		ecsContext: &context.ECSContext{CLIContext: cliContext},
 	}
 
 	err := service.LoadContext()
@@ -572,15 +745,19 @@ func TestLoadContextForLoadBalancerInputError(t *testing.T) {
 	flagSet.String(flags.LoadBalancerNameFlag, loadBalancerName, "")
 	cliContext := cli.NewContext(nil, flagSet, nil)
 	service := &Service{
-		projectContext: &context.Context{CLIContext: cliContext},
+		ecsContext: &context.ECSContext{CLIContext: cliContext},
 	}
 
 	err := service.LoadContext()
 	assert.Error(t, err, "Expected error to load context when flag is a string but got done")
 }
 
+/////////////////
+// Info tests //
+////////////////
+
 func TestServiceInfo(t *testing.T) {
-	entity.TestInfo(func(context *context.Context) entity.ProjectEntity {
+	entity.TestInfo(func(context *context.ECSContext) entity.ProjectEntity {
 		return NewService(context)
 	}, func(req *ecs.ListTasksInput, projectName string, t *testing.T) {
 		assert.Contains(t, aws.StringValue(req.ServiceName), projectName, "ServiceName should contain ProjectName")
@@ -588,31 +765,37 @@ func TestServiceInfo(t *testing.T) {
 	}, t, true)
 }
 
+////////////////
+// Run tests //
+///////////////
+
 func TestServiceRun(t *testing.T) {
-	service := NewService(&context.Context{})
+	service := NewService(&context.ECSContext{})
 	err := service.Run(map[string][]string{})
 	assert.Error(t, err, "Expected unsupported error")
 }
 
-// Up Service tests
+///////////////////////
+// Up Service tests //
+//////////////////////
 
 type UpdateServiceParams struct {
 	serviceName            string
 	taskDefinition         string
-	count                  int64
+	count                  *int64
 	deploymentConfig       *ecs.DeploymentConfiguration
 	networkConfig          *ecs.NetworkConfiguration
 	healthCheckGracePeriod *int64
 	forceDeployment        bool
 }
 
+// For an existing service
 func TestUpdateExistingServiceWithForceFlag(t *testing.T) {
 	// define test flag set
 	forceFlagValue := true
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.ForceDeploymentFlag, forceFlagValue, "")
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	// define existing service
 	serviceName := "test-service"
@@ -629,8 +812,7 @@ func TestUpdateExistingServiceWithForceFlag(t *testing.T) {
 	expectedInput.forceDeployment = forceFlagValue
 
 	// call tests
-	upServiceWithCurrentTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
-	upServiceWithNewTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
+	updateServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, expectedInput, existingService)
 }
 
 func TestUpdateExistingServiceWithNewDeploymentConfig(t *testing.T) {
@@ -641,7 +823,6 @@ func TestUpdateExistingServiceWithNewDeploymentConfig(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.String(flags.DeploymentMaxPercentFlag, strconv.Itoa(deploymentMaxPercent), "")
 	flagSet.String(flags.DeploymentMinHealthyPercentFlag, strconv.Itoa(deploymentMinPercent), "")
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	// define existing service
 	serviceName := "test-service"
@@ -661,8 +842,7 @@ func TestUpdateExistingServiceWithNewDeploymentConfig(t *testing.T) {
 	}
 
 	// call tests
-	upServiceWithCurrentTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
-	upServiceWithNewTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
+	updateServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, expectedInput, existingService)
 }
 
 func TestUpdateExistingServiceWithNewHCGP(t *testing.T) {
@@ -671,7 +851,6 @@ func TestUpdateExistingServiceWithNewHCGP(t *testing.T) {
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.String(flags.HealthCheckGracePeriodFlag, strconv.Itoa(healthCheckGracePeriod), "")
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	// define existing service
 	serviceName := "test-service"
@@ -689,8 +868,7 @@ func TestUpdateExistingServiceWithNewHCGP(t *testing.T) {
 	expectedInput.healthCheckGracePeriod = aws.Int64(int64(healthCheckGracePeriod))
 
 	// call tests
-	upServiceWithCurrentTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
-	upServiceWithNewTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
+	updateServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, expectedInput, existingService)
 }
 
 func TestUpdateExistingServiceWithDesiredCountOverOne(t *testing.T) {
@@ -698,7 +876,6 @@ func TestUpdateExistingServiceWithDesiredCountOverOne(t *testing.T) {
 	existingDesiredCount := 2
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
-	cliContext := cli.NewContext(nil, flagSet, nil)
 
 	// define existing service
 	serviceName := "test-service"
@@ -712,64 +889,92 @@ func TestUpdateExistingServiceWithDesiredCountOverOne(t *testing.T) {
 	// define expected client input given the above info
 	expectedInput := getDefaultUpdateInput()
 	expectedInput.serviceName = serviceName
-	expectedInput.count = *aws.Int64(int64(existingDesiredCount))
+	expectedInput.count = aws.Int64(int64(existingDesiredCount))
 
 	// call tests
-	upServiceWithCurrentTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
-	upServiceWithNewTaskDefTest(t, cliContext, &config.CLIParams{}, &utils.ECSParams{}, expectedInput, existingService)
+	updateServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, expectedInput, existingService)
 }
+
+func TestUpdateExistingServiceWithDaemonSchedulingStrategy(t *testing.T) {
+	// define test values
+	schedulingStrategy := ecs.SchedulingStrategyDaemon
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.SchedulingStrategyFlag, strings.ToLower(schedulingStrategy), "")
+
+	// define existing service
+	serviceName := "test-service"
+	existingService := &ecs.Service{
+		TaskDefinition:     aws.String("arn/test-task-def"),
+		Status:             aws.String("ACTIVE"),
+		SchedulingStrategy: aws.String(schedulingStrategy),
+		ServiceName:        aws.String(serviceName),
+	}
+
+	// define expected client input given the above info
+	expectedInput := getDefaultUpdateInput()
+	expectedInput.serviceName = serviceName
+	expectedInput.count = nil
+	expectedInput.taskDefinition = ""
+
+	// call tests
+	updateServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, expectedInput, existingService)
+	startServiceTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, existingService)
+}
+
+func TestUpdateExistingServiceWithDaemonSchedulingStrategyFlag(t *testing.T) {
+	// define test values
+	schedulingStrategy := ecs.SchedulingStrategyDaemon
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.String(flags.SchedulingStrategyFlag, schedulingStrategy, "")
+
+	// define existing service
+	serviceName := "test-service"
+	existingService := &ecs.Service{
+		TaskDefinition:     aws.String("arn/test-task-def"),
+		Status:             aws.String("ACTIVE"),
+		SchedulingStrategy: aws.String(ecs.SchedulingStrategyReplica),
+		ServiceName:        aws.String(serviceName),
+	}
+
+	// call tests
+	updateServiceExceptionTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, existingService)
+}
+
+func TestUpdateExistingServiceWithServiceDiscoveryFlag(t *testing.T) {
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.Bool(flags.EnableServiceDiscoveryFlag, true, "")
+
+	// define existing service
+	serviceName := "test-service"
+	existingService := &ecs.Service{
+		TaskDefinition: aws.String("arn/test-task-def"),
+		Status:         aws.String("ACTIVE"),
+		ServiceName:    aws.String(serviceName),
+	}
+
+	// call tests
+	updateServiceExceptionTest(t, flagSet, &config.CommandConfig{}, &utils.ECSParams{}, existingService)
+}
+
+///////////////////////////////////////
+//  Update Service Helper functions  //
+///////////////////////////////////////
 
 func getDefaultUpdateInput() UpdateServiceParams {
 	return UpdateServiceParams{
 		deploymentConfig: &ecs.DeploymentConfiguration{},
-		count:            1,
+		count:            aws.Int64(1),
 	}
 }
 
-func getUpdateServiceMockClient(t *testing.T,
-	ctrl *gomock.Controller,
-	describeServiceResponse *ecs.DescribeServicesOutput,
-	taskDefinition ecs.TaskDefinition,
-	registerTaskDefResponse ecs.TaskDefinition,
-	expectedInput UpdateServiceParams) *mock_ecs.MockECSClient {
-
-	mockEcs := mock_ecs.NewMockECSClient(ctrl)
-	gomock.InOrder(
-		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(describeServiceResponse, nil),
-
-		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(gomock.Any(), gomock.Any()).Do(func(x, y interface{}) {
-			verifyTaskDefinitionInput(t, taskDefinition, x.(*ecs.RegisterTaskDefinitionInput))
-		}).Return(&registerTaskDefResponse, nil),
-
-		mockEcs.EXPECT().UpdateService(
-			gomock.Any(), // serviceName
-			gomock.Any(), // taskDefinition
-			gomock.Any(), // count
-			gomock.Any(), // deploymentConfig
-			gomock.Any(), // networkConfig
-			gomock.Any(), // healthCheckGracePeriod
-			gomock.Any(), // force
-		).Do(func(a, b, c, d, e, f, g interface{}) {
-			// validate the client is called with the expected inputs
-			observedInput := UpdateServiceParams{
-				serviceName:            a.(string),
-				taskDefinition:         b.(string),
-				count:                  c.(int64),
-				deploymentConfig:       d.(*ecs.DeploymentConfiguration),
-				networkConfig:          e.(*ecs.NetworkConfiguration),
-				healthCheckGracePeriod: f.(*int64),
-				forceDeployment:        g.(bool),
-			}
-			assert.Equal(t, expectedInput, observedInput)
-
-		}).Return(nil),
-	)
-	return mockEcs
-}
-
-func upServiceWithCurrentTaskDefTest(t *testing.T,
-	cliContext *cli.Context,
-	cliParams *config.CLIParams,
+// Tests only existing services, e.g. updateService private method rather than
+// the public Up method, which would potentially create a new service if it
+// does not already exist.
+func updateServiceTest(t *testing.T,
+	flagSet *flag.FlagSet,
+	commandConfig *config.CommandConfig,
 	ecsParams *utils.ECSParams,
 	expectedInput UpdateServiceParams,
 	existingService *ecs.Service) {
@@ -777,30 +982,50 @@ func upServiceWithCurrentTaskDefTest(t *testing.T,
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// set up expected task def
-	taskDefID := "taskDefinitionId"
-	if existingService != nil {
-		// set to existing if provided
-		taskDefID = entity.GetIdFromArn(existingService.TaskDefinition)
-	}
+	taskDefID := entity.GetIdFromArn(existingService.TaskDefinition)
 	taskDefArn, taskDefinition, registerTaskDefResponse := getTestTaskDef(taskDefID)
 
-	// set up DescribeService() response
+	// Mock ECS calls
+	mockEcs := mock_ecs.NewMockECSClient(ctrl)
 	describeServiceResponse := getDescribeServiceTestResponse(existingService)
+	gomock.InOrder(
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(describeServiceResponse, nil),
 
-	mockEcs := getUpdateServiceMockClient(t, ctrl, describeServiceResponse, taskDefinition, registerTaskDefResponse, expectedInput)
+		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(
+			gomock.Any(), // RegisterTaskDefinitionInput
+			gomock.Any(), // taskDefinitionCache
+		).Do(func(input, cache interface{}) {
+			verifyTaskDefinitionInput(t, taskDefinition, input.(*ecs.RegisterTaskDefinitionInput))
+		}).Return(&registerTaskDefResponse, nil),
 
-	context := &context.Context{
-		ECSClient:  mockEcs,
-		CLIParams:  cliParams,
-		CLIContext: cliContext,
-		ECSParams:  ecsParams,
+		mockEcs.EXPECT().UpdateService(
+			gomock.Any(), // updateServiceInput
+		).Do(func(input interface{}) {
+			req := input.(*ecs.UpdateServiceInput)
+			observedInput := UpdateServiceParams{
+				serviceName:            aws.StringValue(req.Service),
+				taskDefinition:         aws.StringValue(req.TaskDefinition),
+				count:                  req.DesiredCount,
+				deploymentConfig:       req.DeploymentConfiguration,
+				networkConfig:          req.NetworkConfiguration,
+				healthCheckGracePeriod: req.HealthCheckGracePeriodSeconds,
+				forceDeployment:        aws.BoolValue(req.ForceNewDeployment),
+			}
+			assert.Equal(t, expectedInput, observedInput)
+
+		}).Return(nil),
+	)
+
+	cliContext := cli.NewContext(nil, flagSet, nil)
+	ecsContext := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: commandConfig,
+		CLIContext:    cliContext,
+		ECSParams:     ecsParams,
 	}
-	// if taskDef is unchanged, serviceName is taken from current context
-	if existingService != nil {
-		context.ProjectName = *existingService.ServiceName
-	}
-	service := NewService(context)
+
+	ecsContext.ProjectName = *existingService.ServiceName
+	service := NewService(ecsContext)
 	err := service.LoadContext()
 	assert.NoError(t, err, "Unexpected error while loading context in update service with current task def test")
 
@@ -812,76 +1037,119 @@ func upServiceWithCurrentTaskDefTest(t *testing.T,
 	assert.Equal(t, taskDefArn, aws.StringValue(service.TaskDefinition().TaskDefinitionArn), "TaskDefArn should match")
 }
 
-func upServiceWithNewTaskDefTest(t *testing.T,
-	cliContext *cli.Context,
-	cliParams *config.CLIParams,
+func updateServiceExceptionTest(t *testing.T,
+	flagSet *flag.FlagSet,
+	commandConfig *config.CommandConfig,
 	ecsParams *utils.ECSParams,
-	expectedInput UpdateServiceParams,
 	existingService *ecs.Service) {
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// set up expected (new) task def
-	taskDefID := "newTaskDefinitionId"
-	taskDefArn, taskDefinition, registerTaskDefResponse := getTestTaskDef(taskDefID)
+	taskDefID := entity.GetIdFromArn(existingService.TaskDefinition)
+	_, taskDefinition, registerTaskDefResponse := getTestTaskDef(taskDefID)
 
-	// expect input to include new task def
-	expectedInput.taskDefinition = taskDefID
-
-	// set up DescribeService() response
+	// Mock ECS calls
+	mockEcs := mock_ecs.NewMockECSClient(ctrl)
 	describeServiceResponse := getDescribeServiceTestResponse(existingService)
+	gomock.InOrder(
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(describeServiceResponse, nil),
+		mockEcs.EXPECT().RegisterTaskDefinitionIfNeeded(
+			gomock.Any(), // RegisterTaskDefinitionInput
+			gomock.Any(), // taskDefinitionCache
+		).Do(func(input, cache interface{}) {
+			verifyTaskDefinitionInput(t, taskDefinition, input.(*ecs.RegisterTaskDefinitionInput))
+		}).Return(&registerTaskDefResponse, nil),
+	)
 
-	mockEcs := getUpdateServiceMockClient(t, ctrl, describeServiceResponse, taskDefinition, registerTaskDefResponse, expectedInput)
-
-	context := &context.Context{
-		ECSClient:  mockEcs,
-		CLIParams:  cliParams,
-		CLIContext: cliContext,
-		ECSParams:  ecsParams,
+	cliContext := cli.NewContext(nil, flagSet, nil)
+	ecsContext := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: commandConfig,
+		CLIContext:    cliContext,
+		ECSParams:     ecsParams,
 	}
-	service := NewService(context)
+
+	ecsContext.ProjectName = *existingService.ServiceName
+	service := NewService(ecsContext)
 	err := service.LoadContext()
-	assert.NoError(t, err, "Unexpected error while loading context in update service with new task def test")
+	assert.NoError(t, err, "Unexpected error while loading context in update service with current task def test")
 
 	service.SetTaskDefinition(&taskDefinition)
 	err = service.Up()
-	assert.NoError(t, err, "Unexpected error on service up with new task def")
+	assert.Error(t, err, "Expected error when updating service")
+}
 
-	// task definition should be set
-	assert.Equal(t, taskDefArn, aws.StringValue(service.TaskDefinition().TaskDefinitionArn), "TaskDefArn should match")
+func startServiceTest(t *testing.T,
+	flagSet *flag.FlagSet,
+	commandConfig *config.CommandConfig,
+	ecsParams *utils.ECSParams,
+	existingService *ecs.Service) {
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	taskDefID := entity.GetIdFromArn(existingService.TaskDefinition)
+	_, taskDefinition, _ := getTestTaskDef(taskDefID)
+
+	// Mock ECS calls
+	mockEcs := mock_ecs.NewMockECSClient(ctrl)
+	describeServiceResponse := getDescribeServiceTestResponse(existingService)
+	gomock.InOrder(
+		mockEcs.EXPECT().DescribeService(gomock.Any()).Return(describeServiceResponse, nil),
+	)
+
+	cliContext := cli.NewContext(nil, flagSet, nil)
+	ecsContext := &context.ECSContext{
+		ECSClient:     mockEcs,
+		CommandConfig: commandConfig,
+		CLIContext:    cliContext,
+		ECSParams:     ecsParams,
+	}
+
+	ecsContext.ProjectName = *existingService.ServiceName
+	service := NewService(ecsContext)
+	err := service.LoadContext()
+	assert.NoError(t, err, "Unexpected error while loading context in update service with current task def test")
+
+	service.SetTaskDefinition(&taskDefinition)
+	err = service.Start()
+	assert.NoError(t, err, "Unexpected error on service start with current task def")
+
+	assert.Equal(t, "", aws.StringValue(service.TaskDefinition().TaskDefinitionArn), "TaskDefArn should be blank")
 }
 
 func getDescribeServiceTestResponse(existingService *ecs.Service) *ecs.DescribeServicesOutput {
-	describeFailure := &ecs.Failure{
-		Reason: aws.String("MISSING"),
-		Arn:    aws.String("arn:missing-service"),
+	if existingService != nil {
+		return &ecs.DescribeServicesOutput{
+			Failures: []*ecs.Failure{},
+			Services: []*ecs.Service{existingService},
+		}
 	}
-	existingServiceResponse := &ecs.DescribeServicesOutput{
-		Failures: []*ecs.Failure{},
-		Services: []*ecs.Service{existingService},
-	}
-	emptyDescribeServiceResponse := &ecs.DescribeServicesOutput{
-		Failures: []*ecs.Failure{describeFailure},
+
+	// otherwise service does not exist; return empty response
+	return &ecs.DescribeServicesOutput{
+		Failures: []*ecs.Failure{
+			&ecs.Failure{
+				Reason: aws.String("MISSING"),
+				Arn:    aws.String("arn:missing-service"),
+			},
+		},
 		Services: []*ecs.Service{},
 	}
-	if existingService != nil {
-		return existingServiceResponse
-	}
-	return emptyDescribeServiceResponse
 }
 
 func getTestTaskDef(taskDefID string) (taskDefArn string, taskDefinition, registerTaskDefResponse ecs.TaskDefinition) {
-	taskDefArn = "arn/" + taskDefID
+	taskDefArn = arnPrefix + taskDefID
 	taskDefinition = ecs.TaskDefinition{
-		Family:               aws.String("family"),
+		Family:               aws.String(taskDefID),
 		ContainerDefinitions: []*ecs.ContainerDefinition{},
 		Volumes:              []*ecs.Volume{},
 	}
 	registerTaskDefResponse = taskDefinition
 	registerTaskDefResponse.TaskDefinitionArn = aws.String(taskDefArn)
 
-	return taskDefArn, taskDefinition, registerTaskDefResponse
+	return
 }
 
 func verifyTaskDefinitionInput(t *testing.T,

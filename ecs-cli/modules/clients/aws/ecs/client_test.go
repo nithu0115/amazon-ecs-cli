@@ -41,8 +41,8 @@ const clusterName = "clusterName"
 // field whenperforming read.
 type mockReadWriter struct{}
 
-func (rdwr *mockReadWriter) Get(cluster string, profile string) (*config.CLIConfig, error) {
-	return config.NewCLIConfig(clusterName), nil
+func (rdwr *mockReadWriter) Get(cluster string, profile string) (*config.LocalConfig, error) {
+	return config.NewLocalConfig(clusterName), nil
 }
 
 func (rdwr *mockReadWriter) SaveProfile(configName string, profile *config.Profile) error {
@@ -68,17 +68,16 @@ func TestNewECSClientWithRegion(t *testing.T) {
 	globalContext := cli.NewContext(nil, globalSet, nil)
 	context := cli.NewContext(nil, nil, globalContext)
 	rdwr := &mockReadWriter{}
-	_, err := config.NewCLIParams(context, rdwr)
+	_, err := config.NewCommandConfig(context, rdwr)
 	assert.Error(t, err, "Expected error when region not specified")
 
 	globalSet.String("region", "us-east-1", "")
 	globalContext = cli.NewContext(nil, globalSet, nil)
 	context = cli.NewContext(nil, nil, globalContext)
-	params, err := config.NewCLIParams(context, rdwr)
+	config, err := config.NewCommandConfig(context, rdwr)
 	assert.NoError(t, err, "Unexpected error creating opts")
 
-	client := NewECSClient()
-	client.Initialize(params)
+	client := NewECSClient(config)
 
 	// test for UserAgent
 	realClient, ok := client.(*ecsClient).client.(*ecs.ECS)
@@ -277,7 +276,7 @@ func TestRegisterTaskDefinitionIfNeededTDBecomesInactive(t *testing.T) {
 }
 
 func TestRegisterTaskDefinitionIfNeededFamilyNameNotProvided(t *testing.T) {
-	_, _, client, ctrl := setupTestController(t, nil)
+	_, _, client, ctrl := setupTestController(t, getDefaultCLIConfigParams(t))
 	defer ctrl.Finish()
 
 	_, err := client.RegisterTaskDefinitionIfNeeded(&ecs.RegisterTaskDefinitionInput{}, nil)
@@ -449,7 +448,52 @@ func TestRunTask(t *testing.T) {
 		assert.Nil(t, req.LaunchType, "Expected Launch Type to be nil.")
 	}).Return(&ecs.RunTaskOutput{}, nil)
 
-	_, err := client.RunTask(td, group, count, nil, "")
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:        aws.String(clusterName),
+		TaskDefinition: aws.String(td),
+		Group:          aws.String(group),
+		Count:          aws.Int64(int64(count)),
+	}
+
+	_, err := client.RunTask(runTaskInput)
+	assert.NoError(t, err, "Unexpected error when calling RunTask")
+}
+
+func TestRunTaskWithOverrides(t *testing.T) {
+	mockEcs, _, client, ctrl := setupTestController(t, getDefaultCLIConfigParams(t))
+	defer ctrl.Finish()
+
+	td := "taskDef"
+	group := "taskGroup"
+	count := 5
+	containterOverride := &ecs.ContainerOverride{
+			Name:    aws.String("railsapp"),
+			Command: aws.StringSlice([]string{"bundle,exec,puma,-C,config/puma.rb"}),
+		}
+	taskOverride := &ecs.TaskOverride{
+		ContainerOverrides: []*ecs.ContainerOverride{containterOverride},
+	}
+
+	mockEcs.EXPECT().RunTask(gomock.Any()).Do(func(input interface{}) {
+		req := input.(*ecs.RunTaskInput)
+		assert.Equal(t, clusterName, aws.StringValue(req.Cluster), "Expected clusterName to match")
+		assert.Equal(t, td, aws.StringValue(req.TaskDefinition), "Expected taskDefinition to match")
+		assert.Equal(t, group, aws.StringValue(req.Group), "Expected group to match")
+		assert.Equal(t, taskOverride, req.Overrides, "Expected taskOverride to match")
+		assert.Equal(t, int64(count), aws.Int64Value(req.Count), "Expected count to match")
+		assert.Nil(t, req.NetworkConfiguration, "Expected Network Config to be nil.")
+		assert.Nil(t, req.LaunchType, "Expected Launch Type to be nil.")
+	}).Return(&ecs.RunTaskOutput{}, nil)
+
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:        aws.String(clusterName),
+		TaskDefinition: aws.String(td),
+		Group:          aws.String(group),
+		Count:          aws.Int64(int64(count)),
+		Overrides:      taskOverride,
+	}
+
+	_, err := client.RunTask(runTaskInput)
 	assert.NoError(t, err, "Unexpected error when calling RunTask")
 }
 
@@ -471,7 +515,14 @@ func TestRunTaskWithLaunchTypeEC2(t *testing.T) {
 		assert.Nil(t, req.NetworkConfiguration, "Expected Network Config to be nil.")
 	}).Return(&ecs.RunTaskOutput{}, nil)
 
-	_, err := client.RunTask(td, group, count, nil, "EC2")
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:        aws.String(clusterName),
+		TaskDefinition: aws.String(td),
+		Group:          aws.String(group),
+		Count:          aws.Int64(int64(count)),
+		LaunchType:     aws.String("EC2"),
+	}
+	_, err := client.RunTask(runTaskInput)
 	assert.NoError(t, err, "Unexpected error when calling RunTask")
 }
 
@@ -504,7 +555,16 @@ func TestRunTaskWithLaunchTypeFargate(t *testing.T) {
 		assert.NotNil(t, req.NetworkConfiguration, "Expected Network Config to not be nil.")
 	}).Return(&ecs.RunTaskOutput{}, nil)
 
-	_, err := client.RunTask(td, group, count, networkConfig, "FARGATE")
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:              aws.String(clusterName),
+		TaskDefinition:       aws.String(td),
+		Group:                aws.String(group),
+		Count:                aws.Int64(int64(count)),
+		LaunchType:           aws.String("FARGATE"),
+		NetworkConfiguration: networkConfig,
+	}
+
+	_, err := client.RunTask(runTaskInput)
 	assert.NoError(t, err, "Unexpected error when calling RunTask")
 }
 
@@ -535,12 +595,68 @@ func TestRunTask_WithTaskNetworking(t *testing.T) {
 		assert.Equal(t, networkConfig, req.NetworkConfiguration, "Expected networkConfiguration to match")
 	}).Return(&ecs.RunTaskOutput{}, nil)
 
-	_, err := client.RunTask(td, group, count, networkConfig, "")
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:              aws.String(clusterName),
+		TaskDefinition:       aws.String(td),
+		Group:                aws.String(group),
+		Count:                aws.Int64(int64(count)),
+		LaunchType:           aws.String("EC2"),
+		NetworkConfiguration: networkConfig,
+	}
+	_, err := client.RunTask(runTaskInput)
+	assert.NoError(t, err, "Unexpected error when calling RunTask")
+}
+
+func TestRunTask_WithTaskPlacement(t *testing.T) {
+	mockEcs, _, client, ctrl := setupTestController(t, getDefaultCLIConfigParams(t))
+	defer ctrl.Finish()
+
+	td := "taskDef"
+	group := "taskGroup"
+	count := 5
+
+	placementConstraints := []*ecs.PlacementConstraint{
+		{
+			Type: aws.String("distinctInstance"),
+		}, {
+			Expression: aws.String("attribute:ecs.instance-type =~ t2.*"),
+			Type:       aws.String("memberOf"),
+		},
+	}
+	placementStrategy := []*ecs.PlacementStrategy{
+		{
+			Type: aws.String("random"),
+		}, {
+			Field: aws.String("instanceId"),
+			Type:  aws.String("binpack"),
+		},
+	}
+
+	mockEcs.EXPECT().RunTask(gomock.Any()).Do(func(input interface{}) {
+		req := input.(*ecs.RunTaskInput)
+		assert.Equal(t, clusterName, aws.StringValue(req.Cluster), "Expected clusterName to match")
+		assert.Equal(t, td, aws.StringValue(req.TaskDefinition), "Expected taskDefinition to match")
+		assert.Equal(t, group, aws.StringValue(req.Group), "Expected group to match")
+		assert.Equal(t, int64(count), aws.Int64Value(req.Count), "Expected count to match")
+		assert.Equal(t, placementConstraints, req.PlacementConstraints, "Expected placement constraints to match")
+		assert.Equal(t, placementStrategy, req.PlacementStrategy, "Expected placement strategy to match")
+	}).Return(&ecs.RunTaskOutput{}, nil)
+
+	runTaskInput := &ecs.RunTaskInput{
+		Cluster:              aws.String(clusterName),
+		TaskDefinition:       aws.String(td),
+		Group:                aws.String(group),
+		Count:                aws.Int64(int64(count)),
+		LaunchType:           aws.String("EC2"),
+		PlacementConstraints: placementConstraints,
+		PlacementStrategy:    placementStrategy,
+	}
+	_, err := client.RunTask(runTaskInput)
 	assert.NoError(t, err, "Unexpected error when calling RunTask")
 }
 
 func TestIsActiveCluster(t *testing.T) {
-	mockEcs, _, client, ctrl := setupTestController(t, nil)
+	mockEcs, _, client, ctrl := setupTestController(t, getDefaultCLIConfigParams(t))
 	defer ctrl.Finish()
 
 	// API error
@@ -605,7 +721,7 @@ func TestGetEC2InstanceIDs(t *testing.T) {
 }
 
 func TestGetEC2InstanceIDsWithEmptyArns(t *testing.T) {
-	_, _, client, ctrl := setupTestController(t, nil)
+	_, _, client, ctrl := setupTestController(t, getDefaultCLIConfigParams(t))
 	defer ctrl.Finish()
 
 	containerToEC2InstanceMap, err := client.GetEC2InstanceIDs([]*string{})
@@ -650,41 +766,35 @@ func TestGetEC2InstanceIDsErrorCase(t *testing.T) {
 /*
 	Helpers
 */
-func setupTestController(t *testing.T, configParams *config.CLIParams) (*mock_ecsiface.MockECSAPI, *mock_cache.MockCache,
-	ECSClient, *gomock.Controller) {
+func setupTestController(t *testing.T, config *config.CommandConfig) (*mock_ecsiface.MockECSAPI, *mock_cache.MockCache, ECSClient, *gomock.Controller) {
 	ctrl := gomock.NewController(t)
 	mockEcs := mock_ecsiface.NewMockECSAPI(ctrl)
 	mockCache := mock_cache.NewMockCache(ctrl)
-	client := NewECSClient()
 
-	if configParams != nil {
-		client.Initialize(configParams)
-	}
-
-	client.(*ecsClient).client = mockEcs
+	client := newClient(config, mockEcs)
 
 	return mockEcs, mockCache, client, ctrl
 }
 
-func getDefaultCLIConfigParams(t *testing.T) *config.CLIParams {
+func getDefaultCLIConfigParams(t *testing.T) *config.CommandConfig {
 	setDefaultAWSEnvVariables()
 
 	testSession, err := session.NewSession()
 	assert.NoError(t, err, "Unexpected error in creating session")
 
-	return &config.CLIParams{
+	return &config.CommandConfig{
 		Cluster: clusterName,
 		Session: testSession,
 	}
 }
 
-func getCLIConfigParamsWithLaunchType(t *testing.T, launchType string) *config.CLIParams {
+func getCLIConfigParamsWithLaunchType(t *testing.T, launchType string) *config.CommandConfig {
 	setDefaultAWSEnvVariables()
 
 	testSession, err := session.NewSession()
 	assert.NoError(t, err, "Unexpected error in creating session")
 
-	return &config.CLIParams{
+	return &config.CommandConfig{
 		Cluster:    clusterName,
 		Session:    testSession,
 		LaunchType: launchType,
@@ -694,5 +804,5 @@ func getCLIConfigParamsWithLaunchType(t *testing.T, launchType string) *config.C
 func setDefaultAWSEnvVariables() {
 	os.Setenv("AWS_ACCESS_KEY", "AKIDEXAMPLE")
 	os.Setenv("AWS_SECRET_KEY", "secret")
-	os.Setenv("AWS_REGION", "region1")
+	os.Setenv("AWS_REGION", "us-east-1")
 }

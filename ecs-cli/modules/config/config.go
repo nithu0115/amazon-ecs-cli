@@ -22,15 +22,16 @@ const (
 	ecsSectionKey = "ecs"
 )
 
-// iniCLIConfig is the struct used to map to the ini config.
+// iniLocalConfig is the struct used to map to the ini config.
 // This is to allow us to read old ini based config files
-// CliConfig has been updated to use the yaml annotations
-type iniCLIConfig struct {
-	*iniSectionKeys `ini:"ecs"`
+// LocalConfig has been updated to use the yaml annotations
+type iniLocalConfig struct {
+	*IniSectionKeys `ini:"ecs"`
 }
 
-// SectionKeys is the struct embedded in iniCLIConfig. It groups all the keys in the 'ecs' section in the ini file.
-type iniSectionKeys struct {
+// SectionKeys is the struct embedded in iniLocalConfig. It groups all the keys
+// in the 'ecs' section in the ini file.
+type IniSectionKeys struct {
 	Cluster                  string `ini:"cluster"`
 	AwsProfile               string `ini:"aws_profile"`
 	Region                   string `ini:"region"`

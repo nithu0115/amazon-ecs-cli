@@ -16,6 +16,7 @@ package cloudwatchlogs
 import (
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/config"
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs/cloudwatchlogsiface"
 )
@@ -32,10 +33,9 @@ type cwLogsClient struct {
 }
 
 // NewCloudWatchLogsClient creates an instance of ec2Client object.
-func NewCloudWatchLogsClient(params *config.CLIParams, logRegion string) Client {
-	session := params.Session
-	session.Config = session.Config.WithRegion(logRegion)
-	client := cloudwatchlogs.New(session)
+func NewCloudWatchLogsClient(params *config.CommandConfig, logRegion string) Client {
+	newSession := params.Session.Copy(&aws.Config{Region: aws.String(logRegion)})
+	client := cloudwatchlogs.New(newSession)
 	client.Handlers.Build.PushBackNamed(clients.CustomUserAgentHandler())
 	return &cwLogsClient{
 		client: client,
@@ -65,22 +65,22 @@ type LogClientFactory interface {
 
 type clientFactory struct {
 	logClientForRegion map[string]Client
-	cliParams          *config.CLIParams
+	commandConfig      *config.CommandConfig
 }
 
 func (c *clientFactory) Get(region string) Client {
 	client, ok := c.logClientForRegion[region]
 	if !ok {
-		client = NewCloudWatchLogsClient(c.cliParams, region)
+		client = NewCloudWatchLogsClient(c.commandConfig, region)
 		c.logClientForRegion[region] = client
 	}
 	return client
 }
 
 // NewLogClientFactory returns a factory which creates log clients for a region
-func NewLogClientFactory(cliParams *config.CLIParams) LogClientFactory {
+func NewLogClientFactory(commandConfig *config.CommandConfig) LogClientFactory {
 	return &clientFactory{
 		logClientForRegion: make(map[string]Client),
-		cliParams:          cliParams,
+		commandConfig:      commandConfig,
 	}
 }

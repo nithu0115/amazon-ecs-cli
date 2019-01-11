@@ -20,6 +20,7 @@ import (
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/flags"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/urfave/cli"
 )
@@ -39,8 +40,8 @@ const (
 	yamlConfigVersion           = 1
 )
 
-// CLIConfig is the top level struct representing the configuration information
-type CLIConfig struct {
+// LocalConfig is the top level struct representing the local ECS configuration
+type LocalConfig struct {
 	Version                  int // which format version was the config file that was read. 1 == yaml, 0 == old ini
 	Cluster                  string
 	AWSProfile               string
@@ -55,14 +56,14 @@ type CLIConfig struct {
 	DefaultLaunchType        string
 }
 
-// Profile is a simple struct for storing a single profile config
+// Profile is a simple struct for storing a single AWS profile config
 type Profile struct {
 	AWSAccessKey    string `yaml:"aws_access_key_id"`
 	AWSSecretKey    string `yaml:"aws_secret_access_key"`
 	AWSSessionToken string `yaml:"aws_session_token,omitempty"`
 }
 
-// Cluster is a simple struct for storing a single cluster config
+// Cluster is a simple struct for storing a single ECS cluster config
 type Cluster struct {
 	Cluster                  string `yaml:"cluster"`
 	Region                   string `yaml:"region"`
@@ -85,13 +86,12 @@ type ProfileConfig struct {
 	Profiles map[string]Profile `yaml:"ecs_profiles"`
 }
 
-// NewCLIConfig creates a new instance of CliConfig from the cluster name.
-func NewCLIConfig(cluster string) *CLIConfig {
-	return &CLIConfig{Cluster: cluster}
+// NewLocalConfig creates a new instance of CliConfig from the cluster name.
+func NewLocalConfig(cluster string) *LocalConfig {
+	return &LocalConfig{Cluster: cluster}
 }
 
 // ToAWSSession creates a new Session object from the CliConfig object.
-//
 // Region: Order of resolution
 //  1) ECS CLI Flags
 //   a) Region Flag --region
@@ -117,15 +117,28 @@ func NewCLIConfig(cluster string) *CLIConfig {
 //  4) Default AWS Profile - attempts to use credentials (aws_access_key_id, aws_secret_access_key) or assume_role (role_arn, source_profile) from AWS profile name
 //    a) AWS_DEFAULT_PROFILE environment variable (defaults to 'default')
 //  5) EC2 Instance role
-func (cfg *CLIConfig) ToAWSSession(context *cli.Context) (*session.Session, error) {
-	return cfg.toAWSSessionWithConfig(context, &aws.Config{})
+func (cfg *LocalConfig) ToAWSSession(context *cli.Context) (*session.Session, error) {
+	svcConfig := aws.Config{}
+	if ecsEndpoint := RecursiveFlagSearch(context, flags.EndpointFlag); ecsEndpoint != "" {
+		defaultResolver := endpoints.DefaultResolver()
+		ecsCustomResolverFn := func(service, region string, optFns ...func(*endpoints.Options)) (endpoints.ResolvedEndpoint, error) {
+			if service == "ecs" {
+				return endpoints.ResolvedEndpoint{
+					URL: ecsEndpoint,
+				}, nil
+			}
+			return defaultResolver.EndpointFor(service, region, optFns...)
+		}
+		svcConfig.EndpointResolver = endpoints.ResolverFunc(ecsCustomResolverFn)
+	}
+
+	return cfg.toAWSSessionWithConfig(context, &svcConfig)
 }
 
 // ToAWSSessionWithConfig processes credential order of precedence
 // The argument svcConfig is needed to allow important unit tests to work
 // (for example: assume role)
-func (cfg *CLIConfig) toAWSSessionWithConfig(context *cli.Context, svcConfig *aws.Config) (*session.Session, error) {
-
+func (cfg *LocalConfig) toAWSSessionWithConfig(context *cli.Context, svcConfig *aws.Config) (*session.Session, error) {
 	region, err := cfg.getRegion()
 
 	if err != nil || region == "" {
@@ -149,18 +162,18 @@ func (cfg *CLIConfig) toAWSSessionWithConfig(context *cli.Context, svcConfig *aw
 }
 
 func hasProfileFlags(context *cli.Context) bool {
-	return (recursiveFlagSearch(context, flags.ECSProfileFlag) != "" || recursiveFlagSearch(context, flags.AWSProfileFlag) != "")
+	return (RecursiveFlagSearch(context, flags.ECSProfileFlag) != "" || RecursiveFlagSearch(context, flags.AWSProfileFlag) != "")
 }
 
 func hasEnvVars(context *cli.Context) bool {
 	return (os.Getenv(flags.AWSSecretKeyEnvVar) != "" && os.Getenv(flags.AWSAccessKeyEnvVar) != "")
 }
 
-func isDefaultECSProfileCase(cfg *CLIConfig) bool {
+func isDefaultECSProfileCase(cfg *LocalConfig) bool {
 	return (cfg.AWSAccessKey != "" || cfg.AWSSecretKey != "" || cfg.AWSProfile != "")
 }
 
-func sessionFromECSConfig(cfg *CLIConfig, region string, svcConfig *aws.Config) (*session.Session, error) {
+func sessionFromECSConfig(cfg *LocalConfig, region string, svcConfig *aws.Config) (*session.Session, error) {
 	if cfg.AWSSecretKey != "" {
 		return sessionFromKeys(region, cfg.AWSAccessKey, cfg.AWSSecretKey, cfg.AWSSessionToken, svcConfig)
 	}
@@ -194,6 +207,7 @@ func sessionFromProfile(profile string, region string, svcConfig *aws.Config) (*
 func sessionFromKeys(region string, awsAccess string, awsSecret string, sessionToken string, svcConfig *aws.Config) (*session.Session, error) {
 	svcConfig.Region = aws.String(region)
 	svcConfig.Credentials = credentials.NewStaticCredentials(awsAccess, awsSecret, sessionToken)
+
 	return session.NewSession(svcConfig)
 }
 
@@ -209,7 +223,7 @@ func sessionFromKeys(region string, awsAccess string, awsSecret string, sessionT
 //    a) --aws-profile flag
 //    b) AWS_PROFILE environment variable
 //    c) AWS_DEFAULT_PROFILE environment variable (defaults to 'default')
-func (cfg *CLIConfig) getRegion() (string, error) {
+func (cfg *LocalConfig) getRegion() (string, error) {
 	region := cfg.Region
 
 	if region == "" {
@@ -226,10 +240,11 @@ func (cfg *CLIConfig) getRegion() (string, error) {
 	if region == "" {
 		region, err = cfg.getRegionFromAWSProfile()
 	}
+
 	return region, err
 }
 
-func (cfg *CLIConfig) getRegionFromAWSProfile() (string, error) {
+func (cfg *LocalConfig) getRegionFromAWSProfile() (string, error) {
 	awsProfile := ""
 	if cfg.AWSProfile != "" {
 		awsProfile = cfg.AWSProfile
@@ -244,6 +259,6 @@ func (cfg *CLIConfig) getRegionFromAWSProfile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return aws.StringValue(s.Config.Region), nil
 
+	return aws.StringValue(s.Config.Region), nil
 }

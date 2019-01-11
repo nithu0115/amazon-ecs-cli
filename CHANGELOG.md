@@ -1,5 +1,84 @@
 # Changelog
 
+## 1.12.1
+* Bug - Allow container mem_limit to be null if task mem_limit is set (#606)
+* Bug - Allow container mem_limit to be null if mem_reservation is set (#570)
+* Bug - Ensure that logger writes to stdout (#675)
+* Bug - Remove spurious warning for `extends` field in Compose files (#681)
+
+## 1.12.0
+* Feature - Add support for IPC and PID Docker flags #669
+
+## 1.11.1
+* Bug - Revert IPC/PID flags due to bad default behavior
+
+## 1.11.0
+* Feature - Add support ECS Secrets for #664
+* Feature - Add support for IPC and PID flags #665
+* Feature - Add support for mandatory variables in docker-compose #651
+* Enhancement - Add support for FIPs endpoint when using ECR #666
+
+## 1.10.0
+* Feature - Add `registry-creds` command as part of Private Registry Authentication workflow #652 #601
+* Feature - Use Amazon Linux 2 ECS Optimized AMI #647
+* Bug - Catch errors from missing user data files #646
+* Bug - Fix '--create-log-groups' to leave region for Service Discovery resources unchanged #644
+
+## 1.9.0
+* Feature - Add support for Service Discovery (#485)
+* Feature - Add support for EC2 Spot Instances in ECS Clusters (#396)
+* Feature - Add support for custom user data (#16)
+* Bug - Fix error using env vars with nil value (#620)
+* Enhancement - Improve `logs` command behavior and error handling (#612)
+* Enhancement - Add support for GO 1.11 (#632)
+* Enhancement - Add support for new EC2 Instance types (#630, #618)
+
+## 1.8.0
+* Feature - Add support for volumes with docker volume configuration in ECS Params #587
+* Feature - Add support for task placement constraints and strategies in ECS Params (#515, #212)
+* Feature - Add `--force-update` on `compose up` to force re-creation of tasks
+* Feature - Add support for specifying Private Registry Authentication credentials in ECS Params #573
+
+## 1.7.0
+* Feature - Add support for container health check (#472)
+* Feature - Add support for devices (#508)
+* Bug - Fix error in ps command (#522)
+* Bug - Fix error using ENV variables with docker compose v3 (#537)
+* Bug - Fix memory validation in containers (#546)
+* Bug - Fix log message for container resource overrides
+* Bug - Add missing cn-northwest-1 region in Cloudformation template (#552)
+* Enhancement - Add waiter for service creation (#79)
+
+## 1.6.0
+* Feature - Add support for docker Compose file version 3 (#218)
+* Feature - Add support for environmental variables in ecs-params.yml (#530)
+* Feature - Add support for named volumes (#481)
+* Bug - Fix support for slashes in image names (#361)
+* Bug - Fix stack timeout message for CFN stack deletion
+* Bug - Fix exit code to be 1 for all CLI usage errors (#490)
+* Enhancement - Add Pull Request template (#492)
+
+## 1.5.0
+* Feature - Add support for tmpfs
+* Feature - Add support for shm_size
+* Feature - Add Amazon ECS PGP Public Key and instructions on verifying signatures
+* Feature - Retrieve ECS AMI ID from SSM on cluster creation
+
+## 1.4.2
+* Feature - Update AMI to amzn-ami-2017.09.k-amazon-ecs-optimized
+
+## 1.4.1
+* Bug - Ensure tests pass on go 1.10
+* Enhancement - Support longer resource IDs in Cloudformation template
+
+## 1.4.0
+* Feature - Update AMI to amzn-ami-2017.09.j-amazon-ecs-optimized
+* Feature - Add force-deployment flag to compose service (#144)
+* Feature - Support aws_session token in ECS Profiles (#415)
+* Feature - Add support for us-gov-west-1
+* Bug - Fix YAML parse warnings on networks field (#237)
+* Enhancement - Add issue template
+
 ## 1.3.0
 * Feature - Update AMI to amzn-ami-2017.09.g-amazon-ecs-optimized
 * Feature - Add health-check-grace-period flag for compose service up

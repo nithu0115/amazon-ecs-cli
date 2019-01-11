@@ -16,24 +16,24 @@ package main
 import (
 	"os"
 
-	"github.com/sirupsen/logrus"
-	ecscompose "github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/factory"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/factory"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/cluster"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/compose"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/configure"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/flags"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/image"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/license"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/log"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/regcreds"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/utils/logger"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/version"
-	"github.com/cihub/seelog"
+	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
 func main() {
-	// Setup seelog for amazon-ecr-credential-helper
+	// Setup logrus for amazon-ecr-credential-helper
 	logger.SetupLogger()
-	defer seelog.Flush()
 
 	app := cli.NewApp()
 	app.Name = version.AppName
@@ -41,7 +41,7 @@ func main() {
 	app.Version = version.String()
 	app.Author = "Amazon Web Services"
 
-	composeFactory := ecscompose.NewProjectFactory()
+	composeFactory := factory.NewProjectFactory()
 
 	app.Commands = []cli.Command{
 		configureCommand.ConfigureCommand(),
@@ -55,10 +55,18 @@ func main() {
 		licenseCommand.LicenseCommand(),
 		composeCommand.ComposeCommand(composeFactory),
 		logsCommand.LogCommand(),
+		regcredsCommand.RegistryCredsCommand(),
+	}
+
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:  flags.EndpointFlag,
+			Usage: "Use a custom endpoint with the ECS CLI",
+		},
 	}
 
 	err := app.Run(os.Args)
 	if err != nil {
-		logrus.Debug(err)
+		logrus.Fatal(err)
 	}
 }

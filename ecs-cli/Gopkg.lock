@@ -4,7 +4,10 @@
 [[projects]]
   branch = "master"
   name = "github.com/Azure/go-ansiterm"
-  packages = [".","winterm"]
+  packages = [
+    ".",
+    "winterm"
+  ]
   revision = "d6e3b3328b783f23731bc4d058875b0371ff8109"
 
 [[projects]]
@@ -21,18 +24,75 @@
 
 [[projects]]
   name = "github.com/aws/aws-sdk-go"
-  packages = ["aws","aws/awserr","aws/awsutil","aws/client","aws/client/metadata","aws/corehandlers","aws/credentials","aws/credentials/ec2rolecreds","aws/credentials/endpointcreds","aws/credentials/stscreds","aws/defaults","aws/ec2metadata","aws/endpoints","aws/request","aws/session","aws/signer/v4","internal/shareddefaults","private/protocol","private/protocol/ec2query","private/protocol/json/jsonutil","private/protocol/jsonrpc","private/protocol/query","private/protocol/query/queryutil","private/protocol/rest","private/protocol/xml/xmlutil","service/cloudformation","service/cloudformation/cloudformationiface","service/cloudwatchlogs","service/cloudwatchlogs/cloudwatchlogsiface","service/ec2","service/ec2/ec2iface","service/ecr","service/ecr/ecriface","service/ecs","service/ecs/ecsiface","service/sts","service/sts/stsiface"]
-  revision = "ccb909e564ddced884491d966808d9b245a86e6a"
+  packages = [
+    "aws",
+    "aws/arn",
+    "aws/awserr",
+    "aws/awsutil",
+    "aws/client",
+    "aws/client/metadata",
+    "aws/corehandlers",
+    "aws/credentials",
+    "aws/credentials/ec2rolecreds",
+    "aws/credentials/endpointcreds",
+    "aws/credentials/stscreds",
+    "aws/csm",
+    "aws/defaults",
+    "aws/ec2metadata",
+    "aws/endpoints",
+    "aws/request",
+    "aws/session",
+    "aws/signer/v4",
+    "internal/ini",
+    "internal/sdkio",
+    "internal/sdkrand",
+    "internal/sdkuri",
+    "internal/shareddefaults",
+    "private/protocol",
+    "private/protocol/ec2query",
+    "private/protocol/json/jsonutil",
+    "private/protocol/jsonrpc",
+    "private/protocol/query",
+    "private/protocol/query/queryutil",
+    "private/protocol/rest",
+    "private/protocol/restxml",
+    "private/protocol/xml/xmlutil",
+    "service/cloudformation",
+    "service/cloudformation/cloudformationiface",
+    "service/cloudwatchlogs",
+    "service/cloudwatchlogs/cloudwatchlogsiface",
+    "service/ec2",
+    "service/ec2/ec2iface",
+    "service/ecr",
+    "service/ecr/ecriface",
+    "service/ecs",
+    "service/ecs/ecsiface",
+    "service/iam",
+    "service/iam/iamiface",
+    "service/kms",
+    "service/kms/kmsiface",
+    "service/route53",
+    "service/secretsmanager",
+    "service/secretsmanager/secretsmanageriface",
+    "service/servicediscovery",
+    "service/ssm",
+    "service/ssm/ssmiface",
+    "service/sts",
+    "service/sts/stsiface"
+  ]
+  revision = "5ebc7a404e942062fd3aa7ff50975498716eb990"
+  version = "v1.15.78"
 
 [[projects]]
   name = "github.com/awslabs/amazon-ecr-credential-helper"
-  packages = ["ecr-login/api","ecr-login/cache","ecr-login/config"]
-  revision = "19c5038b3c1fc63328b4eb99c507c72f12a27f66"
-
-[[projects]]
-  name = "github.com/cihub/seelog"
-  packages = ["."]
-  revision = "a98235bd6d927ba8379ef4f0050c32c9a2ea17b8"
+  packages = [
+    "ecr-login/api",
+    "ecr-login/cache",
+    "ecr-login/config",
+    "ecr-login/version"
+  ]
+  revision = "b9fd5a88b82e749a5227a31409fea58f91bdd489"
+  version = "v0.2.0"
 
 [[projects]]
   name = "github.com/containerd/continuity"
@@ -47,13 +107,49 @@
 
 [[projects]]
   name = "github.com/docker/cli"
-  packages = ["opts"]
-  revision = "41368a84bb8b1502450b316b34c732d7bb1a103d"
+  packages = [
+    "cli/compose/interpolation",
+    "cli/compose/loader",
+    "cli/compose/schema",
+    "cli/compose/template",
+    "cli/compose/types",
+    "opts"
+  ]
+  revision = "7178075fdad68c953431cab5989dbe08bdcb94ac"
+  version = "v18.06.0-ce-rc3"
 
 [[projects]]
   name = "github.com/docker/docker"
-  packages = ["api/types","api/types/blkiodev","api/types/container","api/types/filters","api/types/mount","api/types/network","api/types/registry","api/types/strslice","api/types/swarm","api/types/swarm/runtime","api/types/versions","opts","pkg/archive","pkg/fileutils","pkg/homedir","pkg/idtools","pkg/ioutils","pkg/jsonmessage","pkg/longpath","pkg/mount","pkg/pools","pkg/stdcopy","pkg/system","pkg/term","pkg/term/windows","pkg/urlutil"]
-  revision = "92309e34e42aec3a0e041403bdd3c4fc0dc20269"
+  packages = [
+    "api/types",
+    "api/types/blkiodev",
+    "api/types/container",
+    "api/types/filters",
+    "api/types/mount",
+    "api/types/network",
+    "api/types/registry",
+    "api/types/strslice",
+    "api/types/swarm",
+    "api/types/swarm/runtime",
+    "api/types/versions",
+    "opts",
+    "pkg/archive",
+    "pkg/fileutils",
+    "pkg/homedir",
+    "pkg/idtools",
+    "pkg/ioutils",
+    "pkg/jsonmessage",
+    "pkg/longpath",
+    "pkg/mount",
+    "pkg/pools",
+    "pkg/stdcopy",
+    "pkg/system",
+    "pkg/term",
+    "pkg/term/windows",
+    "pkg/urlutil"
+  ]
+  revision = "8e435b8279f2af3e0cebd73fa9e25ca1bb26004e"
+  source = "https://github.com/moby/moby.git"
 
 [[projects]]
   name = "github.com/docker/go-connections"
@@ -67,7 +163,19 @@
 
 [[projects]]
   name = "github.com/docker/libcompose"
-  packages = ["cli/app","cli/command","config","logger","lookup","project","project/events","project/options","utils","version","yaml"]
+  packages = [
+    "cli/app",
+    "cli/command",
+    "config",
+    "logger",
+    "lookup",
+    "project",
+    "project/events",
+    "project/options",
+    "utils",
+    "version",
+    "yaml"
+  ]
   revision = "57bd716502dcbe1799f026148016022b0f3b989c"
 
 [[projects]]
@@ -84,7 +192,6 @@
   name = "github.com/go-ini/ini"
   packages = ["."]
   revision = "32e4c1e6bc4e7d0d8451aa6b75200d19e37a536a"
-  version = "v1.32.0"
 
 [[projects]]
   name = "github.com/gogo/protobuf"
@@ -94,7 +201,7 @@
 [[projects]]
   name = "github.com/golang/mock"
   packages = ["gomock"]
-  revision = "bd3c8e81be01eef76d4b503f5e687d2d1354d2d9"
+  revision = "58cd061d09382b6011f84c1291ebe50ef2e25bab"
 
 [[projects]]
   name = "github.com/hashicorp/go-cleanhttp"
@@ -102,14 +209,32 @@
   revision = "ad28ea4487f05916463e2423a55166280e8254b5"
 
 [[projects]]
+  name = "github.com/imdario/mergo"
+  packages = ["."]
+  revision = "9d5f1277e9a8ed20c3684bda8fde67c05628518c"
+  version = "v0.3.4"
+
+[[projects]]
   name = "github.com/jmespath/go-jmespath"
   packages = ["."]
   revision = "0b12d6b5"
 
 [[projects]]
+  name = "github.com/mattn/go-shellwords"
+  packages = ["."]
+  revision = "02e3cf038dcea8290e44424da473dd12be796a8a"
+  version = "v1.0.3"
+
+[[projects]]
   name = "github.com/mitchellh/go-homedir"
   packages = ["."]
   revision = "981ab348d865cf048eb7d17e78ac7192632d8415"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/mitchellh/mapstructure"
+  packages = ["."]
+  revision = "00c29f56e2386353d58c599509e8dc3801b0d716"
 
 [[projects]]
   name = "github.com/opencontainers/go-digest"
@@ -119,12 +244,18 @@
 
 [[projects]]
   name = "github.com/opencontainers/image-spec"
-  packages = ["specs-go","specs-go/v1"]
+  packages = [
+    "specs-go",
+    "specs-go/v1"
+  ]
   revision = "577479e4dc273d3779f00c223c7e0dba4cd6b8b0"
 
 [[projects]]
   name = "github.com/opencontainers/runc"
-  packages = ["libcontainer/system","libcontainer/user"]
+  packages = [
+    "libcontainer/system",
+    "libcontainer/user"
+  ]
   revision = "f376b8033d2caae5207de9be1ee4d4a695886af1"
 
 [[projects]]
@@ -147,7 +278,8 @@
 [[projects]]
   name = "github.com/stretchr/testify"
   packages = ["assert"]
-  revision = "2402e8e7a02fc811447d11f881aa9746cdc57983"
+  revision = "12b6f73e6084dad08a7c6e575284b177ecafbc71"
+  version = "v1.2.1"
 
 [[projects]]
   name = "github.com/urfave/cli"
@@ -176,12 +308,18 @@
 
 [[projects]]
   name = "golang.org/x/net"
-  packages = ["context","context/ctxhttp"]
+  packages = [
+    "context",
+    "context/ctxhttp"
+  ]
   revision = "a6577fac2d73be281a500b310739095313165611"
 
 [[projects]]
   name = "golang.org/x/sys"
-  packages = ["unix","windows"]
+  packages = [
+    "unix",
+    "windows"
+  ]
   revision = "810d7000345868fc619eb81f46307107118f4ae1"
 
 [[projects]]
@@ -192,6 +330,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "2d99798c7ff13359605093e507c2580a909f3cb66a939c25af816149771f5185"
+  inputs-digest = "2c5ab6ee696b39b2da9dba2cd47d69c3d2f04b1196cba92e3a04a58fb0cb8c25"
   solver-name = "gps-cdcl"
   solver-version = 1

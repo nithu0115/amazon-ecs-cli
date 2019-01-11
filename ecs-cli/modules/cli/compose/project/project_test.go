@@ -17,284 +17,93 @@ import (
 	"flag"
 	"io/ioutil"
 	"os"
-	"reflect"
-	"sort"
 	"testing"
 
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/context"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/flags"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/utils/compose"
-	"github.com/docker/libcompose/project"
-	"github.com/docker/libcompose/yaml"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/utils/regcredio"
 	"github.com/stretchr/testify/assert"
 	"github.com/urfave/cli"
 )
 
 const testProjectName = "test-project"
 
-func TestParseComposeForVersion1Files(t *testing.T) {
-	// test data
-	redisImage := "redis"
-	cpuShares := int64(73)
-	command := []string{"bundle exec thin -p 3000"}
-	dnsServers := []string{"1.2.3.4"}
-	dnsSearchDomains := []string{"search.example.com"}
-	entryPoint := "/code/entrypoint.sh"
-	env := []string{"RACK_ENV=development", "SESSION_PORT=session_port"}
-	extraHosts := []string{"test.local:127.10.10.10"}
-	hostname := "foobarbaz"
-	labels := map[string]string{
-		"label1":         "",
-		"com.foo.label2": "value",
-	}
-	links := []string{"redis:redis"}
-	logDriver := "json-file"
-	logOpts := map[string]string{
-		"max-file": "50",
-		"max-size": "50k",
-	}
-	memLimit := int64(1000000000)
-	ports := []string{"5000:5000", "127.0.0.1:8001:8001"}
-	privileged := true
-	readonly := true
-	securityOpts := []string{"label:type:test_virt"}
-	user := "user"
-	volume := yaml.Volume{Destination: "./code"}
-	volumes := yaml.Volumes{Volumes: []*yaml.Volume{&volume}}
-	workingDir := "/var"
-
-	composeFileString := `web:
-  cpu_shares: 73
-  command:
-   - bundle exec thin -p 3000
-  dns:
-   - 1.2.3.4
-  dns_search: search.example.com
-  entrypoint: /code/entrypoint.sh
-  environment:
-    RACK_ENV: development
-    SESSION_PORT: session_port
-  extra_hosts:
-   - test.local:127.10.10.10
-  hostname: "foobarbaz"
-  image: web
-  labels:
-   - label1
-   - com.foo.label2=value
-  links:
-   - "redis:redis"
-  log_driver: json-file
-  log_opt:
-    max-file: 50
-    max-size: 50k
-  mem_limit: 1000000000
-  ports:
-   - '5000:5000'
-   - "127.0.0.1:8001:8001"
-  privileged: true
-  read_only: true
-  security_opt:
-   - label:type:test_virt
-  ulimits:
-    nofile: 1024
-  user: user
-  volumes:
-   - ./code
-  working_dir: /var
-redis:
-  image: redis`
-
-	// setup project and parse
-	composeBytes := [][]byte{}
-	composeBytes = append(composeBytes, []byte(composeFileString))
-	project := setupTestProject(t)
-	project.context.ComposeBytes = composeBytes
-
-	if err := project.parseCompose(); err != nil {
-		t.Fatalf("Unexpected error parsing the compose string [%s]", composeFileString, err)
-	}
-
-	if testProjectName != project.context.ProjectName {
-		t.Errorf("ProjectName not overridden. Expected [%s] Got [%s]", testProjectName, project.context.ProjectName)
-	}
-
-	configs := project.ServiceConfigs()
-	// verify redis ServiceConfig
-	redis, _ := configs.Get("redis")
-	if redis == nil || redis.Image != redisImage {
-		t.Fatalf("Expected [%s] as a service with image [%s] but got configs [%v]", "redis", redisImage, configs)
-	}
-
-	// verify web ServiceConfig
-	web, _ := configs.Get("web")
-	if web == nil {
-		t.Fatalf("Expected [%s] as a service but got configs [%v]", "web", configs)
-	}
-	if cpuShares != int64(web.CPUShares) {
-		t.Errorf("Expected cpuShares to be [%s] but got [%s]", cpuShares, web.CPUShares)
-	}
-	if len(web.Command) != 1 || !reflect.DeepEqual(command[0], web.Command[0]) {
-		t.Errorf("Expected command to be [%v] but got [%v]", command, web.Command)
-	}
-	if len(web.DNS) != 1 || !reflect.DeepEqual(dnsServers[0], web.DNS[0]) {
-		t.Errorf("Expected dns to be [%v] but got [%v]", dnsServers, web.DNS)
-	}
-	if len(web.DNSSearch) != 1 || !reflect.DeepEqual(dnsSearchDomains[0], web.DNSSearch[0]) {
-		t.Errorf("Expected dns search to be [%v] but got [%v]", dnsSearchDomains, web.DNSSearch)
-	}
-	if len(web.Entrypoint) != 1 || entryPoint != web.Entrypoint[0] {
-		t.Errorf("Expected entryPoint to be [%s] but got [%s]", entryPoint, web.Entrypoint)
-	}
-
-	sort.Strings(env)
-	webEnv := []string{}
-	for _, val := range web.Environment {
-		webEnv = append(webEnv, val)
-	}
-	sort.Strings(webEnv)
-	if !reflect.DeepEqual(env, webEnv) {
-		t.Errorf("Expected Environment to be [%v] but got [%v]", env, webEnv)
-	}
-	if !reflect.DeepEqual(extraHosts, web.ExtraHosts) {
-		t.Errorf("Expected extraHosts to be [%v] but got [%v]", extraHosts, web.ExtraHosts)
-	}
-	if hostname != web.Hostname {
-		t.Errorf("Expected Hostname to be [%s] but got [%s]", hostname, web.Hostname)
-	}
-	if len(labels) != len(web.Labels) ||
-		labels["label1"] != web.Labels["label1"] || labels["com.foo.label2"] != web.Labels["com.foo.label2"] {
-		t.Errorf("Expected labels to be [%v] but got [%v]", labels, web.Labels)
-	}
-	if len(web.Links) != 1 || !reflect.DeepEqual(links[0], web.Links[0]) {
-		t.Errorf("Expected links to be [%v] but got [%v]", links, web.Links)
-	}
-	if logDriver != web.Logging.Driver {
-		t.Errorf("Expected logDriver to be [%s] but got [%s]", logDriver, web.Logging.Driver)
-	}
-	if !reflect.DeepEqual(logOpts, web.Logging.Options) {
-		t.Errorf("Expected logOpts to be [%v] but got [%v]", logOpts, web.Logging.Options)
-	}
-	if memLimit != int64(web.MemLimit) {
-		t.Errorf("Expected memLimit to be [%s] but got [%s]", memLimit, web.MemLimit)
-	}
-	if !reflect.DeepEqual(ports, web.Ports) {
-		t.Errorf("Expected ports to be [%v] but got [%v]", ports, web.Ports)
-	}
-	if privileged != web.Privileged {
-		t.Errorf("Expected privileged to be [%s] but got [%s]", privileged, web.Privileged)
-	}
-	if readonly != web.ReadOnly {
-		t.Errorf("Expected readonly to be [%s] but got [%s]", readonly, web.ReadOnly)
-	}
-	if !reflect.DeepEqual(securityOpts, web.SecurityOpt) {
-		t.Errorf("Expected securityOpts to be [%v] but got [%v]", securityOpts, web.SecurityOpt)
-	}
-	if user != web.User {
-		t.Errorf("Expected user to be [%s] but got [%s]", user, web.User)
-	}
-	if len(volumes.Volumes) != len(web.Volumes.Volumes) {
-		t.Errorf("Expected len of volumes to be [%d] but got [%d]", len(volumes.Volumes), len(web.Volumes.Volumes))
-	}
-	if !reflect.DeepEqual(*volumes.Volumes[0], *web.Volumes.Volumes[0]) {
-		t.Errorf("Expected volumes to be [%v] but got [%v]", volumes.Volumes[0], web.Volumes.Volumes[0])
-	}
-	if workingDir != web.WorkingDir {
-		t.Errorf("Expected workingDir to be [%s] but got [%s]", user, web.WorkingDir)
-	}
-
-}
-
-func TestParseComposeForVersion2Files(t *testing.T) {
-	wordpressImage := "wordpress"
-	mysqlImage := "mysql"
-	ports := []string{"80:80"}
-	memoryReservation := int64(500000000)
-
+func TestParseCompose_V2(t *testing.T) {
+	// Setup docker-compose file
 	composeFileString := `version: '2'
 services:
   wordpress:
     image: wordpress
     ports: ["80:80"]
-    mem_reservation: 500000000
   mysql:
     image: mysql`
 
-	// setup project and parse
-	composeBytes := [][]byte{}
-	composeBytes = append(composeBytes, []byte(composeFileString))
+	tmpfile, err := ioutil.TempFile("", "test")
+	assert.NoError(t, err, "Unexpected error in creating test file")
+
+	defer os.Remove(tmpfile.Name())
+
+	_, err = tmpfile.Write([]byte(composeFileString))
+	assert.NoError(t, err, "Unexpected error in writing to test file")
+
+	err = tmpfile.Close()
+	assert.NoError(t, err, "Unexpected error closing file")
+
+	// Set up project
 	project := setupTestProject(t)
-	project.context.ComposeBytes = composeBytes
+	project.ecsContext.ComposeFiles = append(project.ecsContext.ComposeFiles, tmpfile.Name())
 
-	if err := project.parseCompose(); err != nil {
-		t.Fatalf("Unexpected error parsing the compose string [%s]", composeFileString, err)
-	}
+	// verify container configs are populated
+	err = project.parseCompose()
+	assert.NoError(t, err, "Unexpected error parsing file")
+	assert.NotEmpty(t, project.ContainerConfigs(), "Expected container configs to not be empty")
 
-	configs := project.ServiceConfigs()
+	// verify project name is set
+	assert.Equal(t, testProjectName, project.ecsContext.ProjectName, "Expected ProjectName to be overridden.")
 
-	// verify wordpress ServiceConfig
-	wordpress, ok := configs.Get("wordpress")
-	if wordpress == nil || !ok || wordpress.Image != wordpressImage {
-		t.Fatalf("Expected [%s] as a service with image [%s] but got configs [%v]", "redis", wordpressImage, configs)
-	}
-	if !reflect.DeepEqual(ports, wordpress.Ports) {
-		t.Errorf("Expected ports to be [%v] but got [%v]", ports, wordpress.Ports)
-	}
-
-	assert.Equal(t, memoryReservation, int64(wordpress.MemReservation), "Expected memoryReservation to match")
-
-	// verify mysql ServiceConfig
-	mysql, ok := configs.Get("mysql")
-	if mysql == nil || !ok || mysql.Image != mysqlImage {
-		t.Fatalf("Expected [%s] as a service with image [%s] but got configs [%v]", "redis", mysqlImage, configs)
-	}
+	// verify top-level volumes are empty
+	assert.Empty(t, project.VolumeConfigs().VolumeWithHost, "Expected volume configs to be empty")
+	assert.Empty(t, project.VolumeConfigs().VolumeEmptyHost, "Expected volume configs to be empty")
 }
 
-func TestParseComposeForVersion1WithEnvFile(t *testing.T) {
-	envKey := "rails_env"
-	envValue := "development"
-	envContents := []byte(envKey + "=" + envValue)
+func TestParseCompose_V2_WithVolumeConfigs(t *testing.T) {
+	// Setup docker-compose file
+	composeFileString := `version: '2'
+services:
+  wordpress:
+    image: wordpress
+  mysql:
+    image: mysql
+    volumes:
+      - banana:/tmp/cache
+      - :/tmp/cache
+      - ./cache:/tmp/cache:ro
+volumes:
+  banana:`
 
-	envFile, err := ioutil.TempFile("", "example")
-	if err != nil {
-		t.Fatal("Error creating tmp file:", err)
-	}
-	defer os.Remove(envFile.Name()) // clean up
-	if _, err := envFile.Write(envContents); err != nil {
-		t.Fatal("Error writing to tmp file:", err)
-	}
+	tmpfile, err := ioutil.TempFile("", "test")
+	assert.NoError(t, err, "Unexpected error in creating test file")
 
-	webImage := "webapp"
+	defer os.Remove(tmpfile.Name())
 
-	composeFileString := `web:
-  image: webapp
-  env_file:
-  - ` + envFile.Name()
+	_, err = tmpfile.Write([]byte(composeFileString))
+	assert.NoError(t, err, "Unexpected error in writing to test file")
 
-	// setup project and parse
-	composeBytes := [][]byte{}
-	composeBytes = append(composeBytes, []byte(composeFileString))
+	err = tmpfile.Close()
+	assert.NoError(t, err, "Unexpected error closing file")
+
+	// Set up project
 	project := setupTestProject(t)
-	project.context.ComposeBytes = composeBytes
+	project.ecsContext.ComposeFiles = append(project.ecsContext.ComposeFiles, tmpfile.Name())
 
-	if err := project.parseCompose(); err != nil {
-		t.Fatalf("Unexpected error parsing the compose string [%s]", composeFileString, err)
-	}
+	err = project.parseCompose()
+	expectedNamedVolumes := []string{"banana", "volume-1"}
+	expectedHosts := map[string]string{"./cache": "volume-2"}
 
-	configs := project.ServiceConfigs()
-
-	// verify wordpress ServiceConfig
-	web, ok := configs.Get("web")
-	if web == nil || !ok || web.Image != webImage {
-		t.Fatalf("Expected [%s] as a service with image [%s] but got configs [%v]", "redis", webImage, configs)
-	}
-
-	// skips the second one if envKey2
-	if web.Environment == nil || len(web.Environment) != 1 {
-		t.Fatalf("Expected non empty Environment, but was [%v]", web.Environment)
-	}
-	if string(envContents) != web.Environment[0] {
-		t.Errorf("Expected env [%s]=[%s] But was [%v]", envKey, envValue, web.Environment)
-	}
+	// verify VolumeConfigs are populated
+	assert.Equal(t, expectedHosts, project.VolumeConfigs().VolumeWithHost, "Expected volume configs to match")
+	assert.Equal(t, expectedNamedVolumes, project.VolumeConfigs().VolumeEmptyHost, "Expected volume configs to match")
 }
 
 func TestParseECSParams(t *testing.T) {
@@ -328,10 +137,10 @@ run_params:
 	assert.NoError(t, err, "Could not write data to ecs fields tempfile")
 
 	if err := project.parseECSParams(); err != nil {
-		t.Fatalf("Unexpected error parsing the ecs-params data: %v", ecsParamsString, err)
+		t.Fatalf("Unexpected error parsing the ecs-params data [%s]: %v", ecsParamsString, err)
 	}
 
-	ecsParams := project.context.ECSParams
+	ecsParams := project.ecsContext.ECSParams
 	assert.NotNil(t, ecsParams, "Expected ecsParams to be set on project")
 	assert.Equal(t, "1", ecsParams.Version, "Expected Version to match")
 
@@ -347,12 +156,46 @@ run_params:
 	err = tmpfile.Close()
 	assert.NoError(t, err, "Could not close tempfile")
 }
+func TestParseECSParamsWithEnvironment(t *testing.T) {
+	ecsParamsString := `version: 1
+task_definition:
+  task_size:
+    mem_limit: ${MEM_LIMIT}
+    cpu_limit: $CPU_LIMIT`
+
+	os.Setenv("MEM_LIMIT", "1000")
+	os.Setenv("CPU_LIMIT", "200")
+
+	content := []byte(ecsParamsString)
+
+	tmpfile, err := ioutil.TempFile("", "ecs-params")
+	assert.NoError(t, err, "Could not create ecs fields tempfile")
+
+	ecsParamsFileName := tmpfile.Name()
+	defer os.Remove(ecsParamsFileName)
+
+	project := setupTestProjectWithEcsParams(t, ecsParamsFileName)
+
+	_, err = tmpfile.Write(content)
+	assert.NoError(t, err, "Could not write data to ecs fields tempfile")
+
+	err = project.parseECSParams()
+	if assert.NoError(t, err) {
+		ecsParams := project.ecsContext.ECSParams
+		ts := ecsParams.TaskDefinition.TaskSize
+		assert.Equal(t, "200", ts.Cpu, "Expected CPU to match")
+		assert.Equal(t, "1000", ts.Memory, "Expected CPU to match")
+	}
+
+	err = tmpfile.Close()
+	assert.NoError(t, err, "Could not close tempfile")
+}
 
 func TestParseECSParams_NoFile(t *testing.T) {
 	project := setupTestProject(t)
 	err := project.parseECSParams()
 	if assert.NoError(t, err) {
-		assert.Nil(t, project.context.ECSParams)
+		assert.Nil(t, project.ecsContext.ECSParams)
 	}
 }
 
@@ -389,7 +232,7 @@ run_params:
 
 	err = project.parseECSParams()
 	if assert.NoError(t, err) {
-		ecsParams := project.context.ECSParams
+		ecsParams := project.ecsContext.ECSParams
 		assert.NotNil(t, ecsParams, "Expected ecsParams to be set on project")
 		assert.Equal(t, "1", ecsParams.Version, "Expected Version to match")
 
@@ -412,36 +255,135 @@ run_params:
 	assert.NoError(t, err, "Could not close tempfile")
 }
 
+func TestThrowErrorForUnsupportedComposeVersion(t *testing.T) {
+	unsupportedVersion := "4"
+	composeFileString := `version: '` + unsupportedVersion + `'
+services:
+  wordpress:
+    image: wordpress
+    ports: ["80:80"]
+    mem_reservation: 500000000
+  mysql:
+    image: mysql`
+
+	// set up compose file
+	tmpfile, err := ioutil.TempFile("", "test")
+	if err != nil {
+		t.Fatal("Unexpected error in creating test file", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write([]byte(composeFileString)); err != nil {
+		t.Fatal("Unexpected error writing to test file: ", err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		t.Fatal("Unexpected error closing test file: ", err)
+	}
+
+	// set up project and parse
+	project := setupTestProject(t)
+	project.ecsContext.ComposeFiles = append(project.ecsContext.ComposeFiles, tmpfile.Name())
+	observedError := project.parseCompose()
+
+	expectedError := "Unsupported Docker Compose version found: " + unsupportedVersion
+
+	if assert.Error(t, observedError) {
+		assert.Equal(t, expectedError, observedError.Error())
+	}
+}
+
 func setupTestProject(t *testing.T) *ecsProject {
 	return setupTestProjectWithEcsParams(t, "")
 }
 
 func setupTestProjectWithEcsParams(t *testing.T, ecsParamsFileName string) *ecsProject {
+	return setupTestProjectWithECSRegistryCreds(t, ecsParamsFileName, "")
+}
+
+// TODO: refactor into all-purpose 'setupTestProject' func
+func setupTestProjectWithECSRegistryCreds(t *testing.T, ecsParamsFileName, credFileName string) *ecsProject {
 	envLookup, err := utils.GetDefaultEnvironmentLookup()
-	if err != nil {
-		t.Fatal("Unexpected error in setting up a project", err)
-	}
+	assert.NoError(t, err, "Unexpected error setting up environment lookup")
+
 	resourceLookup, err := utils.GetDefaultResourceLookup()
-	if err != nil {
-		t.Fatal("Unexpected error in setting up a project", err)
-	}
+	assert.NoError(t, err, "Unexpected error setting up resource lookup")
 
 	flagSet := flag.NewFlagSet("ecs-cli", 0)
 	flagSet.String(flags.ProjectNameFlag, testProjectName, "")
 	flagSet.String(flags.ECSParamsFileNameFlag, ecsParamsFileName, "")
+	flagSet.String(flags.RegistryCredsFileNameFlag, credFileName, "")
 
 	parentContext := cli.NewContext(nil, flagSet, nil)
 	cliContext := cli.NewContext(nil, nil, parentContext)
 
-	ecsContext := &context.Context{
+	ecsContext := &context.ECSContext{
 		CLIContext: cliContext,
 	}
 	ecsContext.EnvironmentLookup = envLookup
 	ecsContext.ResourceLookup = resourceLookup
-	libcomposeProject := project.NewProject(&ecsContext.Context, nil, nil)
 
 	return &ecsProject{
-		context: ecsContext,
-		Project: *libcomposeProject,
+		ecsContext: ecsContext,
+	}
+}
+
+func TestParseECSRegistryCreds(t *testing.T) {
+	credsInputString := `version: "1"
+registry_credential_outputs:
+  task_execution_role: someTestRole
+  container_credentials:
+    my.example.registry.net:
+      credentials_parameter: arn:aws:secretsmanager::secret:amazon-ecs-cli-setup-my.example.registry.net
+      container_names:
+      - web
+    another.example.io:
+      credentials_parameter: arn:aws:secretsmanager::secret:amazon-ecs-cli-setup-another.example.io
+      kms_key_id: arn:aws:kms::key/some-key-57yrt
+      container_names:
+      - test`
+
+	content := []byte(credsInputString)
+
+	tmpfile, err := ioutil.TempFile("", regcredio.ECSCredFileBaseName)
+	assert.NoError(t, err, "Could not create ecs registry creds tempfile")
+
+	credFileName := tmpfile.Name()
+	defer os.Remove(credFileName)
+
+	project := setupTestProjectWithECSRegistryCreds(t, "", credFileName)
+
+	_, err = tmpfile.Write(content)
+	assert.NoError(t, err, "Could not write data to ecs registry creds tempfile")
+
+	if err := project.parseECSRegistryCreds(); err != nil {
+		t.Fatalf("Unexpected error parsing the "+regcredio.ECSCredFileBaseName+" data [%s]: %v", credsInputString, err)
+	}
+
+	ecsRegCreds := project.ecsRegistryCreds
+	assert.NotNil(t, ecsRegCreds, "Expected "+regcredio.ECSCredFileBaseName+" to be set on project")
+	assert.Equal(t, "1", ecsRegCreds.Version, "Expected Version to match")
+
+	credResources := ecsRegCreds.CredentialResources
+	assert.NotNil(t, credResources, "Expected credential resources to be non-nil")
+	assert.Equal(t, "someTestRole", credResources.TaskExecutionRole)
+	assert.NotNil(t, credResources.ContainerCredentials, "Expected ContainerCredentials to be non-nil")
+
+	firstOutputEntry := credResources.ContainerCredentials["my.example.registry.net"]
+	assert.NotEmpty(t, firstOutputEntry)
+	assert.Equal(t, "arn:aws:secretsmanager::secret:amazon-ecs-cli-setup-my.example.registry.net", firstOutputEntry.CredentialARN)
+	assert.Equal(t, "", firstOutputEntry.KMSKeyID)
+	assert.ElementsMatch(t, []string{"web"}, firstOutputEntry.ContainerNames)
+
+	secondOutputEntry := credResources.ContainerCredentials["another.example.io"]
+	assert.NotEmpty(t, secondOutputEntry)
+	assert.Equal(t, "arn:aws:secretsmanager::secret:amazon-ecs-cli-setup-another.example.io", secondOutputEntry.CredentialARN)
+	assert.Equal(t, "arn:aws:kms::key/some-key-57yrt", secondOutputEntry.KMSKeyID)
+	assert.ElementsMatch(t, []string{"test"}, secondOutputEntry.ContainerNames)
+}
+
+func TestParseECSRegistryCreds_NoFile(t *testing.T) {
+	project := setupTestProject(t)
+	err := project.parseECSRegistryCreds()
+	if assert.NoError(t, err) {
+		assert.Nil(t, project.ecsRegistryCreds)
 	}
 }

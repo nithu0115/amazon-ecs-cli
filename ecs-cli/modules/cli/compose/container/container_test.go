@@ -20,6 +20,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -79,7 +80,7 @@ func TestStatus(t *testing.T) {
 	ecsCont.ExitCode = aws.Int64(int64(exitCode))
 	state = container.State()
 	if !strings.Contains(state, strconv.Itoa(exitCode)) {
-		t.Errorf("Expected state to contain [%s] but got [%s]", exitCode, state)
+		t.Errorf("Expected state to contain [%d] but got [%s]", exitCode, state)
 	}
 }
 
@@ -124,6 +125,15 @@ func TestPortString(t *testing.T) {
 	if !strings.Contains(portString, expectedBinding1WithoutEC2IpAddr) {
 		t.Errorf("Expected portString to contain [%s] but got [%s]", expectedBinding1WithoutEC2IpAddr, portString)
 	}
+}
+
+func TestHealthStatus(t *testing.T) {
+	containerHealth := ecs.HealthStatusHealthy
+	container := setupContainer()
+	container.ecsContainer.SetHealthStatus(containerHealth)
+
+	// container.HealthStatus() should simply report the value returned by the ECS API
+	assert.Equal(t, containerHealth, container.HealthStatus())
 }
 
 func setupContainer() Container {

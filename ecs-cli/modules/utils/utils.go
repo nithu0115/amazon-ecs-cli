@@ -17,7 +17,24 @@ package utils
 import (
 	"fmt"
 	"os"
+
+	"github.com/aws/aws-sdk-go/aws/awserr"
 )
+
+const (
+	// ECSCLIResourcePrefix is prepended to the names of resources created through the ecs-cli
+	ECSCLIResourcePrefix = "amazon-ecs-cli-setup-"
+)
+
+// InSlice checks if the given string exists in the given slice:
+func InSlice(str string, list []string) bool {
+	for _, s := range list {
+		if s == str {
+			return true
+		}
+	}
+	return false
+}
 
 // GetHomeDir returns the file path of the user's home directory.
 func GetHomeDir() (string, error) {
@@ -32,4 +49,12 @@ func GetHomeDir() (string, error) {
 	}
 
 	return homeDir, nil
+}
+
+// EntityAlreadyExists returns true if an error indicates that the AWS resource already exists
+func EntityAlreadyExists(err error) bool {
+	if awsErr, ok := err.(awserr.Error); ok {
+		return awsErr.Code() == "EntityAlreadyExists"
+	}
+	return false
 }

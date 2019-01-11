@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	cwlogsclient "github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/cloudwatchlogs"
 	ecsclient "github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/ecs"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/flags"
@@ -27,12 +26,13 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
 const (
 	// followLogsWaitTime is the time in seconds to sleep between API calls to get logs
-	followLogsWaitTime = 30
+	followLogsWaitTime = 10
 )
 
 type logConfiguration struct {
@@ -57,30 +57,32 @@ func Logs(c *cli.Context) {
 	if err != nil {
 		logrus.Fatal("Error executing 'logs': ", err)
 	}
-	cliParams, err := config.NewCLIParams(c, rdwr)
+	commandConfig, err := config.NewCommandConfig(c, rdwr)
 	if err != nil {
 		logrus.Fatal("Error executing 'logs': ", err)
 	}
 
-	ecsClient := ecsclient.NewECSClient()
-	ecsClient.Initialize(cliParams)
-	request, logRegion, err := logsRequest(c, ecsClient, cliParams)
+	ecsClient := ecsclient.NewECSClient(commandConfig)
+	request, logRegion, err := logsRequest(c, ecsClient, commandConfig)
 	if err != nil {
 		logrus.Fatal("Error executing 'logs': ", err)
 	}
 
-	cwLogsClient := cwlogsclient.NewCloudWatchLogsClient(cliParams, logRegion)
+	cwLogsClient := cwlogsclient.NewCloudWatchLogsClient(commandConfig, logRegion)
 
-	printLogEvents(c, request, cwLogsClient)
+	err = logs(c, request, cwLogsClient)
+	if err != nil {
+		logrus.Fatal("Error executing 'logs': ", err)
+	}
 }
 
-func logsRequest(context *cli.Context, ecsClient ecsclient.ECSClient, params *config.CLIParams) (*cloudwatchlogs.FilterLogEventsInput, string, error) {
+func logsRequest(context *cli.Context, ecsClient ecsclient.ECSClient, config *config.CommandConfig) (*cloudwatchlogs.FilterLogEventsInput, string, error) {
 	taskID := context.String(flags.TaskIDFlag)
 	taskDefIdentifier := context.String(flags.TaskDefinitionFlag)
 
 	var err error
 	if taskDefIdentifier == "" {
-		taskDefIdentifier, err = getTaskDefArn(context, ecsClient, params)
+		taskDefIdentifier, err = getTaskDefArn(context, ecsClient, config)
 		if err != nil {
 			return nil, "", err
 		}
@@ -110,7 +112,7 @@ func logsRequest(context *cli.Context, ecsClient ecsclient.ECSClient, params *co
 	return request, aws.StringValue(logConfig.logRegion), nil
 }
 
-func getTaskDefArn(context *cli.Context, ecsClient ecsclient.ECSClient, params *config.CLIParams) (string, error) {
+func getTaskDefArn(context *cli.Context, ecsClient ecsclient.ECSClient, config *config.CommandConfig) (string, error) {
 	var taskIDs []*string
 	taskID := context.String(flags.TaskIDFlag)
 	taskIDs = append(taskIDs, aws.String(taskID))
@@ -119,15 +121,34 @@ func getTaskDefArn(context *cli.Context, ecsClient ecsclient.ECSClient, params *
 		return "", errors.Wrap(err, "Failed to Describe Task")
 	}
 	if len(tasks) == 0 {
-		return "", fmt.Errorf("Failed to describe Task: Could Not Find Task %s in cluster %s in region %s. If the task has been stopped, use --%s to specify the Task Definition.", taskID, params.Cluster, aws.StringValue(params.Session.Config.Region), flags.TaskDefinitionFlag)
+		return "", fmt.Errorf("Failed to describe Task: Could Not Find Task %s in cluster %s in region %s. If the task has been stopped, use --%s to specify the Task Definition.", taskID, config.Cluster, aws.StringValue(config.Session.Config.Region), flags.TaskDefinitionFlag)
 	}
 
 	return aws.StringValue(tasks[0].TaskDefinitionArn), nil
 }
 
-func printLogEvents(context *cli.Context, input *cloudwatchlogs.FilterLogEventsInput, cwLogsClient cwlogsclient.Client) {
-	var lastEvent *cloudwatchlogs.FilteredLogEvent
-	cwLogsClient.FilterAllLogEvents(input, func(events []*cloudwatchlogs.FilteredLogEvent) {
+func logs(context *cli.Context, input *cloudwatchlogs.FilterLogEventsInput, cwLogsClient cwlogsclient.Client) error {
+	lastEvent, err := printLogEvents(context, input, cwLogsClient)
+	if err != nil {
+		return err
+	}
+
+	for context.Bool(flags.FollowLogsFlag) {
+		time.Sleep(followLogsWaitTime * time.Second)
+		if lastEvent != nil {
+			input.SetStartTime(aws.Int64Value(lastEvent.Timestamp) + 1)
+		}
+		lastEvent, err = printLogEvents(context, input, cwLogsClient)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func printLogEvents(context *cli.Context, input *cloudwatchlogs.FilterLogEventsInput, cwLogsClient cwlogsclient.Client) (lastEvent *cloudwatchlogs.FilteredLogEvent, err error) {
+	err = cwLogsClient.FilterAllLogEvents(input, func(events []*cloudwatchlogs.FilteredLogEvent) {
 		for _, event := range events {
 			lastEvent = event
 			if context.Bool(flags.TimeStampsFlag) {
@@ -139,14 +160,7 @@ func printLogEvents(context *cli.Context, input *cloudwatchlogs.FilterLogEventsI
 			fmt.Println()
 		}
 	})
-
-	for context.Bool(flags.FollowLogsFlag) {
-		time.Sleep(followLogsWaitTime * time.Second)
-		if lastEvent != nil {
-			input.SetStartTime(aws.Int64Value(lastEvent.Timestamp) + 1)
-		}
-		printLogEvents(context, input, cwLogsClient)
-	}
+	return lastEvent, err
 }
 
 // validateLogFlags ensures that conflicting flags are not used
@@ -265,7 +279,7 @@ func getLogConfiguration(taskDef *ecs.TaskDefinition, taskID string, containerNa
 
 func getContainerLogConfig(containerDef *ecs.ContainerDefinition) (*logConfiguration, error) {
 	if containerDef.LogConfiguration == nil {
-		return nil, fmt.Errorf("Container '%s' is not configured to use CloudWatch logs; logConfigution ('logging' in Docker Compose) is a required container definition field", aws.StringValue(containerDef.Name))
+		return nil, fmt.Errorf("Container '%s' is not configured to use CloudWatch logs; logConfiguration ('logging' in Docker Compose) is a required container definition field", aws.StringValue(containerDef.Name))
 	}
 	logConfig := &logConfiguration{}
 	if aws.StringValue(containerDef.LogConfiguration.LogDriver) != "awslogs" {

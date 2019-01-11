@@ -15,17 +15,17 @@ package factory
 
 import (
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/context"
-	ecscompose "github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/project"
-
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/compose/project"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/config"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/utils/compose"
-	libcomposecommand "github.com/docker/libcompose/cli/command"
+
+	"github.com/docker/libcompose/cli/command"
 	"github.com/urfave/cli"
 )
 
 // ProjectFactory is an interface that surfaces a function to create ECS Compose Project (intended to make mocking easy in tests)
 type ProjectFactory interface {
-	Create(cliContext *cli.Context, isService bool) (ecscompose.Project, error)
+	Create(cliContext *cli.Context, isService bool) (project.Project, error)
 }
 
 // projectFactory implements ProjectFactory interface
@@ -38,16 +38,16 @@ func NewProjectFactory() ProjectFactory {
 }
 
 // Create is a factory function that creates and configures ECS Compose project using the supplied command line arguments
-func (projectFactory projectFactory) Create(cliContext *cli.Context, isService bool) (ecscompose.Project, error) {
+func (projectFactory projectFactory) Create(cliContext *cli.Context, isService bool) (project.Project, error) {
 	// creates and populates the ecs context
-	ecsContext := &context.Context{}
+	ecsContext := &context.ECSContext{}
 	if err := projectFactory.populateContext(ecsContext, cliContext); err != nil {
 		return nil, err
 	}
 	ecsContext.IsService = isService
 
 	// creates and initializes project using the context
-	project := ecscompose.NewProject(ecsContext)
+	project := project.NewProject(ecsContext)
 
 	// load the configs
 	if err := projectFactory.loadProject(project); err != nil {
@@ -57,7 +57,7 @@ func (projectFactory projectFactory) Create(cliContext *cli.Context, isService b
 }
 
 // populateContext sets the required CLI arguments to the ECS context
-func (projectFactory projectFactory) populateContext(ecsContext *context.Context, cliContext *cli.Context) error {
+func (projectFactory projectFactory) populateContext(ecsContext *context.ECSContext, cliContext *cli.Context) error {
 	/*
 		Populate the following libcompose fields on the ECS context:
 		 - ComposeFiles: reads from `--file` or `-f` flags. Defaults to
@@ -65,7 +65,7 @@ func (projectFactory projectFactory) populateContext(ecsContext *context.Context
 		 specified.
 		 - ProjectName: reads from `--project-name` or `-p` flags.
 	*/
-	libcomposecommand.Populate(&ecsContext.Context, cliContext)
+	command.Populate(&ecsContext.Context, cliContext)
 	ecsContext.CLIContext = cliContext
 
 	// reads and sets the parameters (required to create ECS Service
@@ -75,12 +75,12 @@ func (projectFactory projectFactory) populateContext(ecsContext *context.Context
 		utils.LogError(err, "Error loading config")
 		return err
 	}
-	params, err := config.NewCLIParams(cliContext, rdwr)
+	config, err := config.NewCommandConfig(cliContext, rdwr)
 	if err != nil {
-		utils.LogError(err, "Unable to create an instance of CLIParams given the cli context")
+		utils.LogError(err, "Unable to create an instance of CommandConfig given the cli context")
 		return err
 	}
-	ecsContext.CLIParams = params
+	ecsContext.CommandConfig = config
 
 	// populate libcompose context
 	if err = projectFactory.populateLibcomposeContext(ecsContext); err != nil {
@@ -91,7 +91,7 @@ func (projectFactory projectFactory) populateContext(ecsContext *context.Context
 }
 
 // populateLibcomposeContext sets the required Libcompose lookup utilities on the ECS context
-func (projectFactory projectFactory) populateLibcomposeContext(ecsContext *context.Context) error {
+func (projectFactory projectFactory) populateLibcomposeContext(ecsContext *context.ECSContext) error {
 	envLookup, err := utils.GetDefaultEnvironmentLookup()
 	if err != nil {
 		return err
@@ -107,7 +107,7 @@ func (projectFactory projectFactory) populateLibcomposeContext(ecsContext *conte
 }
 
 // loadProject opens the project by loading configs
-func (projectFactory projectFactory) loadProject(project ecscompose.Project) error {
+func (projectFactory projectFactory) loadProject(project project.Project) error {
 	err := project.Parse()
 	if err != nil {
 		utils.LogError(err, "Unable to open ECS Compose Project")

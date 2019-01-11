@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/config"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/utils"
@@ -26,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/aws/aws-sdk-go/service/cloudformation/cloudformationiface"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -88,11 +88,10 @@ func init() {
 
 // CloudformationClient defines methods to interact the with the CloudFormationAPI interface.
 type CloudformationClient interface {
-	// TODO: Modify the interface and tbe client to not have the Initialize method.
-	Initialize(*config.CLIParams)
-	CreateStack(string, string, *CfnStackParams) (string, error)
+	CreateStack(string, string, bool, *CfnStackParams) (string, error)
 	WaitUntilCreateComplete(string) error
 	DeleteStack(string) error
+	DescribeStacks(string) (*cloudformation.DescribeStacksOutput, error)
 	WaitUntilDeleteComplete(string) error
 	UpdateStack(string, *CfnStackParams) (string, error)
 	WaitUntilUpdateComplete(string) error
@@ -103,33 +102,38 @@ type CloudformationClient interface {
 
 // cloudformationClient implements CloudFormationClient.
 type cloudformationClient struct {
-	client    cloudformationiface.CloudFormationAPI
-	cliParams *config.CLIParams
-	sleeper   utils.Sleeper
+	client  cloudformationiface.CloudFormationAPI
+	config  *config.CommandConfig
+	sleeper utils.Sleeper
 }
 
 // NewCloudformationClient creates an instance of cloudFormationClient object.
-func NewCloudformationClient() CloudformationClient {
-	return &cloudformationClient{}
+func NewCloudformationClient(config *config.CommandConfig) CloudformationClient {
+	cfnClient := cloudformation.New(config.Session)
+	cfnClient.Handlers.Build.PushBackNamed(clients.CustomUserAgentHandler())
+
+	return newClient(config, cfnClient)
 }
 
-// Initialize initializes all the fields of the cloudFormationClient object.
-func (c *cloudformationClient) Initialize(params *config.CLIParams) {
-	cfnClient := cloudformation.New(params.Session)
-	cfnClient.Handlers.Build.PushBackNamed(clients.CustomUserAgentHandler())
-	c.client = cfnClient
-	c.cliParams = params
-	c.sleeper = &utils.TimeSleeper{}
+func newClient(config *config.CommandConfig, client cloudformationiface.CloudFormationAPI) CloudformationClient {
+	return &cloudformationClient{
+		config:  config,
+		client:  client,
+		sleeper: &utils.TimeSleeper{},
+	}
 }
 
 // CreateStack creates the cloudformation stack by invoking the sdk's CreateStack API and returns the stack id.
-func (c *cloudformationClient) CreateStack(template string, stackName string, params *CfnStackParams) (string, error) {
-	output, err := c.client.CreateStack(&cloudformation.CreateStackInput{
+func (c *cloudformationClient) CreateStack(template, stackName string, capabilityIAM bool, params *CfnStackParams) (string, error) {
+	input := &cloudformation.CreateStackInput{
 		TemplateBody: aws.String(template),
-		Capabilities: aws.StringSlice([]string{cloudformation.CapabilityCapabilityIam}),
 		StackName:    aws.String(stackName),
 		Parameters:   params.Get(),
-	})
+	}
+	if capabilityIAM {
+		input.Capabilities = aws.StringSlice([]string{cloudformation.CapabilityCapabilityIam})
+	}
+	output, err := c.client.CreateStack(input)
 
 	if err != nil {
 		return "", err
@@ -146,6 +150,13 @@ func (c *cloudformationClient) DeleteStack(stackName string) error {
 	})
 
 	return err
+}
+
+// DescribeStacks describes a CFN stack
+func (c *cloudformationClient) DescribeStacks(stackName string) (*cloudformation.DescribeStacksOutput, error) {
+	return c.client.DescribeStacks(&cloudformation.DescribeStacksInput{
+		StackName: aws.String(stackName),
+	})
 }
 
 // UpdateStack creates the cloudformation stack by invoking the sdk's UpdateStack API.
@@ -167,7 +178,7 @@ func (c *cloudformationClient) UpdateStack(stackName string, params *CfnStackPar
 
 // ValidateStackExists validates if a stack exists with the specified name.
 func (c *cloudformationClient) ValidateStackExists(stackName string) error {
-	_, err := c.describeStack(stackName)
+	_, err := c.describeStackStatus(stackName)
 	return err
 }
 
@@ -231,7 +242,7 @@ func (c *cloudformationClient) waitUntilComplete(stackName string, hasFailed fai
 		}
 
 		// No errors in stack events. Query stack status.
-		status, err := c.describeStack(stackName)
+		status, err := c.describeStackStatus(stackName)
 		if err != nil {
 			return err
 		}
@@ -260,7 +271,7 @@ func (c *cloudformationClient) waitUntilComplete(stackName string, hasFailed fai
 		c.sleeper.Sleep(delayWait)
 	}
 
-	return fmt.Errorf("Timeout waiting for stack creation to complete")
+	return fmt.Errorf("Timeout waiting for stack operation to complete")
 }
 
 // latestStackEvent describes stack events and gets the latest event.
@@ -311,11 +322,9 @@ func (c *cloudformationClient) firstStackEventWithFailure(stackName string, next
 	return nil, fmt.Errorf("Unable to find failure event in stack '%s'", stackName)
 }
 
-// describeStack describes the stack and gets the stack status.
-func (c *cloudformationClient) describeStack(stackName string) (string, error) {
-	output, err := c.client.DescribeStacks(&cloudformation.DescribeStacksInput{
-		StackName: aws.String(stackName),
-	})
+// describeStackStatus describes the stack and gets the stack status.
+func (c *cloudformationClient) describeStackStatus(stackName string) (string, error) {
+	output, err := c.DescribeStacks(stackName)
 
 	if err != nil {
 		return "", err
@@ -410,7 +419,7 @@ func failureInDeleteEvent(event *cloudformation.StackEvent) bool {
 			"eventStatus": status,
 			"resource":    aws.StringValue(event.PhysicalResourceId),
 			"reason":      aws.StringValue(event.ResourceStatusReason),
-		}).Error("Error deleting cloudformation stack for cluster")
+		}).Error("Error deleting cloudformation stack")
 		return true
 	}
 

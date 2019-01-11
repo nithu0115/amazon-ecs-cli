@@ -19,20 +19,17 @@
 # [[override]]
 #  name = "github.com/x/y"
 #  version = "2.4.0"
-
+[prune]
+  go-tests = true
+  unused-packages = true
 
 [[constraint]]
   name = "github.com/aws/aws-sdk-go"
-  # version = "1.12.58"
-  revision = "ccb909e564ddced884491d966808d9b245a86e6a"
+  version = "1.15.2"
 
 [[constraint]]
   name = "github.com/awslabs/amazon-ecr-credential-helper"
-  revision = "19c5038b3c1fc63328b4eb99c507c72f12a27f66"
-
-[[constraint]]
-  name = "github.com/cihub/seelog"
-  revision = "a98235bd6d927ba8379ef4f0050c32c9a2ea17b8"
+  version = "0.2.0"
 
 [[constraint]]
   name = "github.com/docker/go-units"
@@ -56,7 +53,7 @@
 
 [[constraint]]
   name = "github.com/golang/mock"
-  revision = "bd3c8e81be01eef76d4b503f5e687d2d1354d2d9"
+  revision = "58cd061d09382b6011f84c1291ebe50ef2e25bab"
 
 [[constraint]]
   name = "github.com/pkg/errors"
@@ -68,7 +65,7 @@
 
 [[constraint]]
   name = "github.com/stretchr/testify"
-  revision = "2402e8e7a02fc811447d11f881aa9746cdc57983"
+  version = "1.2.1"
 
 [[constraint]]
   name = "github.com/urfave/cli"
@@ -78,3 +75,12 @@
 [[constraint]]
   name = "gopkg.in/yaml.v2"
   revision = "a5b47d31c556af34a302ce5d659e6fea44d90de0"
+
+[[constraint]]
+  name = "github.com/docker/cli"
+  version = "18.06.0-ce"
+
+[[override]]
+  name = "github.com/docker/docker"
+  revision = "8e435b8279f2af3e0cebd73fa9e25ca1bb26004e"
+  source = "https://github.com/moby/moby.git"

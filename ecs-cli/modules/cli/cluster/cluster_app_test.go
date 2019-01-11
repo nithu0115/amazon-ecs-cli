@@ -21,9 +21,12 @@ import (
 	"os"
 	"testing"
 
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/cli/cluster/userdata"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/cloudformation"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/cloudformation/mock"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/ecs/mock"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/ssm"
+	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/clients/aws/ssm/mock"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/commands/flags"
 	"github.com/aws/amazon-ecs-cli/ecs-cli/modules/config"
 	"github.com/aws/aws-sdk-go/aws"
@@ -35,8 +38,10 @@ import (
 )
 
 const (
-	clusterName = "defaultCluster"
-	stackName   = "defaultCluster"
+	clusterName    = "defaultCluster"
+	stackName      = "defaultCluster"
+	amiID          = "ami-deadb33f"
+	mockedUserData = "some user data"
 )
 
 type mockReadWriter struct {
@@ -45,8 +50,8 @@ type mockReadWriter struct {
 	defaultLaunchType string
 }
 
-func (rdwr *mockReadWriter) Get(cluster string, profile string) (*config.CLIConfig, error) {
-	cliConfig := config.NewCLIConfig(rdwr.clusterName)
+func (rdwr *mockReadWriter) Get(cluster string, profile string) (*config.LocalConfig, error) {
+	cliConfig := config.NewLocalConfig(rdwr.clusterName)
 	cliConfig.CFNStackName = rdwr.clusterName
 	cliConfig.DefaultLaunchType = rdwr.defaultLaunchType
 	return cliConfig, nil
@@ -74,16 +79,32 @@ func newMockReadWriter() *mockReadWriter {
 	}
 }
 
-func setupTest(t *testing.T) (*mock_ecs.MockECSClient, *mock_cloudformation.MockCloudformationClient) {
+type mockUserDataBuilder struct {
+	userdata string
+	files    []string
+}
+
+func (b *mockUserDataBuilder) AddFile(fileName string) error {
+	b.files = append(b.files, fileName)
+	return nil
+}
+
+func (b *mockUserDataBuilder) Build() (string, error) {
+	return b.userdata, nil
+}
+
+func setupTest(t *testing.T) (*mock_ecs.MockECSClient, *mock_cloudformation.MockCloudformationClient, *mock_ssm.MockClient) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockECS := mock_ecs.NewMockECSClient(ctrl)
 	mockCloudformation := mock_cloudformation.NewMockCloudformationClient(ctrl)
+	mockSSM := mock_ssm.NewMockClient(ctrl)
 
 	os.Setenv("AWS_ACCESS_KEY", "AKIDEXAMPLE")
 	os.Setenv("AWS_SECRET_KEY", "secret")
 	os.Setenv("AWS_REGION", "us-west-1")
-	return mockECS, mockCloudformation
+
+	return mockECS, mockCloudformation, mockSSM
 }
 
 /////////////////
@@ -92,9 +113,10 @@ func setupTest(t *testing.T) (*mock_ecs.MockECSClient, *mock_cloudformation.Mock
 
 func TestClusterUp(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
@@ -102,28 +124,31 @@ func TestClusterUp(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithForce(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(nil),
 		mockCloudformation.EXPECT().DeleteStack(stackName).Return(nil),
 		mockCloudformation.EXPECT().WaitUntilDeleteComplete(stackName).Return(nil),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Return("", nil),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
 
@@ -134,30 +159,35 @@ func TestClusterUpWithForce(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithoutPublicIP(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Do(func(x, y, z interface{}) {
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			capabilityIAM := w.(bool)
 			cfnParams := z.(*cloudformation.CfnStackParams)
-			associateIPAddress, err := cfnParams.GetParameter(cloudformation.ParameterKeyAssociatePublicIPAddress)
+			associateIPAddress, err := cfnParams.GetParameter(ParameterKeyAssociatePublicIPAddress)
 			assert.NoError(t, err, "Unexpected error getting cfn parameter")
 			assert.Equal(t, "false", aws.StringValue(associateIPAddress.ParameterValue), "Should not associate public IP address")
+			assert.True(t, capabilityIAM, "Expected capability capabilityIAM to be true")
 		}).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
@@ -172,21 +202,120 @@ func TestClusterUpWithoutPublicIP(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, globalContext)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
+	assert.NoError(t, err, "Unexpected error bringing up cluster")
+}
+
+func TestClusterUpWithUserData(t *testing.T) {
+	defer os.Clearenv()
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
+
+	oldNewUserDataBuilder := newUserDataBuilder
+	defer func() { newUserDataBuilder = oldNewUserDataBuilder }()
+	userdataMock := &mockUserDataBuilder{
+		userdata: mockedUserData,
+	}
+	newUserDataBuilder = func(clusterName string) userdata.UserDataBuilder {
+		return userdataMock
+	}
+
+	gomock.InOrder(
+		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
+	)
+
+	gomock.InOrder(
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+
+	gomock.InOrder(
+		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			cfnParams := z.(*cloudformation.CfnStackParams)
+			param, err := cfnParams.GetParameter(ParameterKeyUserData)
+			assert.NoError(t, err, "Expected User Data parameter to be set")
+			assert.Equal(t, mockedUserData, aws.StringValue(param.ParameterValue), "Expected user data to match")
+		}).Return("", nil),
+		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
+	)
+
+	globalSet := flag.NewFlagSet("ecs-cli", 0)
+	globalContext := cli.NewContext(nil, globalSet, nil)
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
+	flagSet.String(flags.KeypairNameFlag, "default", "")
+	userDataFiles := &cli.StringSlice{}
+	userDataFiles.Set("some_file")
+	userDataFiles.Set("some_file2")
+	flagSet.Var(userDataFiles, flags.UserDataFlag, "")
+
+	context := cli.NewContext(nil, flagSet, globalContext)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = createCluster(context, awsClients, commandConfig)
+	assert.NoError(t, err, "Unexpected error bringing up cluster")
+
+	assert.ElementsMatch(t, []string{"some_file", "some_file2"}, userdataMock.files, "Expected userdata file list to match")
+}
+
+func TestClusterUpWithSpotPrice(t *testing.T) {
+	defer os.Clearenv()
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
+
+	spotPrice := "0.03"
+
+	gomock.InOrder(
+		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
+	)
+
+	gomock.InOrder(
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+
+	gomock.InOrder(
+		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			cfnParams := z.(*cloudformation.CfnStackParams)
+			param, err := cfnParams.GetParameter(ParameterKeySpotPrice)
+			assert.NoError(t, err, "Expected Spot Price parameter to be set")
+			assert.Equal(t, spotPrice, aws.StringValue(param.ParameterValue), "Expected spot price to match")
+		}).Return("", nil),
+		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
+	)
+
+	globalSet := flag.NewFlagSet("ecs-cli", 0)
+	globalContext := cli.NewContext(nil, globalSet, nil)
+
+	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
+	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
+	flagSet.String(flags.KeypairNameFlag, "default", "")
+	flagSet.String(flags.SpotPriceFlag, spotPrice, "")
+
+	context := cli.NewContext(nil, flagSet, globalContext)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithVPC(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	vpcID := "vpc-02dd3038"
 	subnetIds := "subnet-04726b21,subnet-04346b21"
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
@@ -196,20 +325,21 @@ func TestClusterUpWithVPC(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithAvailabilityZones(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	vpcAZs := "us-west-2c,us-west-2a"
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
@@ -218,20 +348,21 @@ func TestClusterUpWithAvailabilityZones(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithCustomRole(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	instanceRole := "sparklepony"
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.String(flags.KeypairNameFlag, "default", "")
@@ -239,16 +370,17 @@ func TestClusterUpWithCustomRole(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithTwoCustomRoles(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	instanceRole := "sparklepony, sparkleunicorn"
 
@@ -259,16 +391,17 @@ func TestClusterUpWithTwoCustomRoles(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for custom instance role")
 }
 
 func TestClusterUpWithDefaultAndCustomRoles(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	instanceRole := "sparklepony"
 
@@ -279,16 +412,17 @@ func TestClusterUpWithDefaultAndCustomRoles(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for custom instance role")
 }
 
 func TestClusterUpWithNoRoles(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, false, "")
@@ -296,18 +430,19 @@ func TestClusterUpWithNoRoles(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for custom instance role")
 }
 
 func TestClusterUpWithoutKeyPair(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
@@ -315,21 +450,21 @@ func TestClusterUpWithoutKeyPair(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithSecurityGroupWithoutVPC(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	securityGroupID := "sg-eeaabc8d"
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -341,18 +476,19 @@ func TestClusterUpWithSecurityGroupWithoutVPC(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for security group without VPC")
 }
 
 func TestClusterUpWith2SecurityGroups(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
 
-	mocksForSuccessfulClusterUp(mockECS, mockCloudformation)
+	mocksForSuccessfulClusterUp(mockECS, mockCloudformation, mockSSM)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	securityGroupIds := "sg-eeaabc8d,sg-eaaebc8d"
 	vpcId := "vpc-02dd3038"
@@ -368,21 +504,21 @@ func TestClusterUpWith2SecurityGroups(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithSubnetsWithoutVPC(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	subnetID := "subnet-72f52e32"
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -394,21 +530,21 @@ func TestClusterUpWithSubnetsWithoutVPC(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for subnets without VPC")
 }
 
 func TestClusterUpWithVPCWithoutSubnets(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	vpcID := "vpc-02dd3038"
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -420,22 +556,22 @@ func TestClusterUpWithVPCWithoutSubnets(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for VPC without subnets")
 }
 
 func TestClusterUpWithAvailabilityZonesWithVPC(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	vpcID := "vpc-02dd3038"
 	vpcAZs := "us-west-2c,us-west-2a"
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -448,21 +584,21 @@ func TestClusterUpWithAvailabilityZonesWithVPC(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for VPC with AZs")
 }
 
 func TestClusterUpWithout2AvailabilityZones(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	vpcAZs := "us-west-2c"
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -474,10 +610,10 @@ func TestClusterUpWithout2AvailabilityZones(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error for 2 AZs")
 }
 
@@ -488,38 +624,45 @@ func TestCliFlagsToCfnStackParams(t *testing.T) {
 	flagSet.String(flags.KeypairNameFlag, "default", "")
 
 	context := cli.NewContext(nil, flagSet, nil)
-	params := cliFlagsToCfnStackParams(context)
+	params, err := cliFlagsToCfnStackParams(context, clusterName, config.LaunchTypeEC2)
+	assert.NoError(t, err, "Unexpected error from call to cliFlagsToCfnStackParams")
 
-	_, err := params.GetParameter(cloudformation.ParameterKeyAsgMaxSize)
+	_, err = params.GetParameter(ParameterKeyAsgMaxSize)
 	assert.Error(t, err, "Expected error for parameter ParameterKeyAsgMaxSize")
 	assert.Equal(t, cloudformation.ParameterNotFoundError, err, "Expect error to be ParameterNotFoundError")
 
 	flagSet.String(flags.AsgMaxSizeFlag, "2", "")
 	context = cli.NewContext(nil, flagSet, nil)
-	params = cliFlagsToCfnStackParams(context)
-	_, err = params.GetParameter(cloudformation.ParameterKeyAsgMaxSize)
+	params, err = cliFlagsToCfnStackParams(context, clusterName, config.LaunchTypeEC2)
+	assert.NoError(t, err, "Unexpected error from call to cliFlagsToCfnStackParams")
+	_, err = params.GetParameter(ParameterKeyAsgMaxSize)
 	assert.NoError(t, err, "Unexpected error getting parameter ParameterKeyAsgMaxSize")
 }
 
 func TestClusterUpForImageIdInput(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	imageID := "ami-12345"
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(imageID), nil),
+	)
+
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Do(func(x, y, z interface{}) {
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			capabilityIAM := w.(bool)
 			cfnStackParams := z.(*cloudformation.CfnStackParams)
-			param, err := cfnStackParams.GetParameter(cloudformation.ParameterKeyAmiId)
+			param, err := cfnStackParams.GetParameter(ParameterKeyAmiId)
 			assert.NoError(t, err, "Expected image id params to be present")
 			assert.Equal(t, imageID, aws.StringValue(param.ParameterValue), "Expected image id to match")
+			assert.True(t, capabilityIAM, "Expected capability capabilityIAM to be true")
 		}).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
@@ -531,16 +674,17 @@ func TestClusterUpForImageIdInput(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
 func TestClusterUpWithClusterNameEmpty(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	globalSet := flag.NewFlagSet("ecs-cli", 0)
 	globalContext := cli.NewContext(nil, globalSet, nil)
@@ -551,10 +695,10 @@ func TestClusterUpWithClusterNameEmpty(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, globalContext)
 	rdwr := &mockReadWriter{clusterName: ""}
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error bringing up cluster")
 }
 
@@ -566,24 +710,26 @@ func TestClusterUpWithoutRegion(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	_, err := newCliParams(context, rdwr)
+	_, err := newCommandConfig(context, rdwr)
 	assert.Error(t, err, "Expected error due to missing region in bringing up cluster")
 }
 
 func TestClusterUpWithFargateLaunchTypeFlag(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Do(func(x, y, z interface{}) {
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
 			cfnParams := z.(*cloudformation.CfnStackParams)
-			isFargate, err := cfnParams.GetParameter(cloudformation.ParameterKeyIsFargate)
+			isFargate, err := cfnParams.GetParameter(ParameterKeyIsFargate)
 			assert.NoError(t, err, "Unexpected error getting cfn parameter")
 			assert.Equal(t, "true", aws.StringValue(isFargate.ParameterValue), "Should have Fargate launch type.")
 		}).Return("", nil),
@@ -598,12 +744,12 @@ func TestClusterUpWithFargateLaunchTypeFlag(t *testing.T) {
 
 	context := cli.NewContext(nil, flagSet, globalContext)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 
-	assert.Equal(t, config.LaunchTypeFargate, cliParams.LaunchType, "Launch Type should be FARGATE")
+	assert.Equal(t, config.LaunchTypeFargate, commandConfig.LaunchType, "Launch Type should be FARGATE")
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
@@ -614,20 +760,21 @@ func TestClusterUpWithFargateDefaultLaunchTypeConfig(t *testing.T) {
 	}
 
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Do(func(x, y, z interface{}) {
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			capabilityIAM := w.(bool)
 			cfnParams := z.(*cloudformation.CfnStackParams)
-			isFargate, err := cfnParams.GetParameter(cloudformation.ParameterKeyIsFargate)
+			isFargate, err := cfnParams.GetParameter(ParameterKeyIsFargate)
 			assert.NoError(t, err, "Unexpected error getting cfn parameter")
 			assert.Equal(t, "true", aws.StringValue(isFargate.ParameterValue), "Should have Fargate launch type.")
+			assert.True(t, capabilityIAM, "Expected capability capabilityIAM to be true")
 		}).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 		mockCloudformation.EXPECT().DescribeNetworkResources(stackName).Return(nil),
@@ -639,12 +786,12 @@ func TestClusterUpWithFargateDefaultLaunchTypeConfig(t *testing.T) {
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
 
 	context := cli.NewContext(nil, flagSet, globalContext)
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 
-	assert.Equal(t, config.LaunchTypeFargate, cliParams.LaunchType, "Launch Type should be FARGATE")
+	assert.Equal(t, config.LaunchTypeFargate, commandConfig.LaunchType, "Launch Type should be FARGATE")
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
@@ -655,20 +802,24 @@ func TestClusterUpWithFargateLaunchTypeFlagOverride(t *testing.T) {
 	}
 
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Do(func(x, y, z interface{}) {
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Do(func(x, y, w, z interface{}) {
+			capabilityIAM := w.(bool)
 			cfnParams := z.(*cloudformation.CfnStackParams)
-			isFargate, err := cfnParams.GetParameter(cloudformation.ParameterKeyIsFargate)
+			isFargate, err := cfnParams.GetParameter(ParameterKeyIsFargate)
 			assert.NoError(t, err, "Unexpected error getting cfn parameter")
 			assert.Equal(t, "true", aws.StringValue(isFargate.ParameterValue), "Should have Fargate launch type.")
+			assert.True(t, capabilityIAM, "Expected capability capabilityIAM to be true")
 		}).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 		mockCloudformation.EXPECT().DescribeNetworkResources(stackName).Return(nil),
@@ -680,12 +831,12 @@ func TestClusterUpWithFargateLaunchTypeFlagOverride(t *testing.T) {
 	flagSet.String(flags.LaunchTypeFlag, config.LaunchTypeFargate, "")
 
 	context := cli.NewContext(nil, flagSet, globalContext)
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 
-	assert.Equal(t, config.LaunchTypeFargate, cliParams.LaunchType, "Launch Type should be FARGATE")
+	assert.Equal(t, config.LaunchTypeFargate, commandConfig.LaunchType, "Launch Type should be FARGATE")
 	assert.NoError(t, err, "Unexpected error bringing up cluster")
 }
 
@@ -696,16 +847,18 @@ func TestClusterUpWithEC2LaunchTypeFlagOverride(t *testing.T) {
 	}
 
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Return("", nil),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
 	globalSet := flag.NewFlagSet("ecs-cli", 0)
@@ -715,10 +868,10 @@ func TestClusterUpWithEC2LaunchTypeFlagOverride(t *testing.T) {
 	flagSet.String(flags.LaunchTypeFlag, config.LaunchTypeEC2, "")
 
 	context := cli.NewContext(nil, flagSet, globalContext)
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 
 	// This is kind of hack - this error will only get checked if launch type is EC2
 	assert.Error(t, err, "Expected error for bringing up cluster with empty default launch type.")
@@ -731,16 +884,15 @@ func TestClusterUpWithBlankDefaultLaunchTypeConfig(t *testing.T) {
 	}
 
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Return("", nil),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
 	globalSet := flag.NewFlagSet("ecs-cli", 0)
@@ -750,25 +902,26 @@ func TestClusterUpWithBlankDefaultLaunchTypeConfig(t *testing.T) {
 	flagSet.Bool(flags.CapabilityIAMFlag, false, "")
 
 	context := cli.NewContext(nil, flagSet, globalContext)
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 
 	// This is kind of hack - this error will only get checked if launch type is EC2
 	assert.Error(t, err, "Expected error for bringing up cluster with empty default launch type.")
 }
 
 func TestClusterUpWithEmptyCluster(t *testing.T) {
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
-
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 	)
 
@@ -776,23 +929,24 @@ func TestClusterUpWithEmptyCluster(t *testing.T) {
 	flagSet.Bool(flags.EmptyFlag, true, "")
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error bringing up empty cluster")
 }
 
 func TestClusterUpWithEmptyClusterWithExistingStack(t *testing.T) {
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
-
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(nil),
 	)
 
@@ -800,10 +954,10 @@ func TestClusterUpWithEmptyClusterWithExistingStack(t *testing.T) {
 	flagSet.Bool(flags.EmptyFlag, true, "")
 	context := cli.NewContext(nil, flagSet, nil)
 	rdwr := newMockReadWriter()
-	cliParams, err := newCliParams(context, rdwr)
-	assert.NoError(t, err, "Unexpected error creating CLIParams")
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err = createCluster(context, mockECS, mockCloudformation, cliParams)
+	err = createCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Unexpected error bringing up empty cluster")
 }
 
@@ -811,20 +965,12 @@ func TestClusterUpWithEmptyClusterWithExistingStack(t *testing.T) {
 // Cluster Down //
 //////////////////
 func TestClusterDown(t *testing.T) {
-	newCliParams = func(context *cli.Context, rdwr config.ReadWriter) (*config.CLIParams, error) {
-		return &config.CLIParams{
-			Cluster:      clusterName,
-			CFNStackName: stackName,
-		}, nil
-	}
-
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().IsActiveCluster(gomock.Any()).Return(true, nil),
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(nil),
 		mockCloudformation.EXPECT().DeleteStack(stackName).Return(nil),
 		mockCloudformation.EXPECT().WaitUntilDeleteComplete(stackName).Return(nil),
@@ -834,35 +980,36 @@ func TestClusterDown(t *testing.T) {
 	flagSet.Bool(flags.ForceFlag, true, "")
 
 	context := cli.NewContext(nil, flagSet, nil)
-	err := deleteCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = deleteCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error deleting cluster")
 }
 
 func TestClusterDownWithoutForce(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	flagSet := flag.NewFlagSet("ecs-cli-down", 0)
 	context := cli.NewContext(nil, flagSet, nil)
-	err := deleteCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = deleteCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error when force deleting cluster")
 }
 
 func TestClusterDownForEmptyCluster(t *testing.T) {
-	newCliParams = func(context *cli.Context, rdwr config.ReadWriter) (*config.CLIParams, error) {
-		return &config.CLIParams{
-			Cluster:      clusterName,
-			CFNStackName: stackName,
-		}, nil
-	}
-
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
 
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().IsActiveCluster(gomock.Any()).Return(true, nil),
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
 		mockECS.EXPECT().DeleteCluster(clusterName).Return(clusterName, nil),
 	)
@@ -871,8 +1018,12 @@ func TestClusterDownForEmptyCluster(t *testing.T) {
 	flagSet.Bool(flags.ForceFlag, true, "")
 
 	context := cli.NewContext(nil, flagSet, nil)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
 
-	err := deleteCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	err = deleteCluster(context, awsClients, commandConfig)
+
 	assert.NoError(t, err, "Unexpected error deleting cluster")
 }
 
@@ -892,16 +1043,10 @@ func TestDeleteClusterPrompt(t *testing.T) {
 //////////////////
 
 func TestClusterScale(t *testing.T) {
-	newCliParams = func(context *cli.Context, rdwr config.ReadWriter) (*config.CLIParams, error) {
-		return &config.CLIParams{
-			Cluster:      clusterName,
-			CFNStackName: stackName,
-		}, nil
-	}
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
 
-	mockECS.EXPECT().Initialize(gomock.Any())
 	mockECS.EXPECT().IsActiveCluster(gomock.Any()).Return(true, nil)
 
 	existingParameters := []*cloudformationsdk.Parameter{
@@ -913,7 +1058,6 @@ func TestClusterScale(t *testing.T) {
 		},
 	}
 
-	mockCloudformation.EXPECT().Initialize(gomock.Any())
 	mockCloudformation.EXPECT().GetStackParameters(stackName).Return(existingParameters, nil)
 	mockCloudformation.EXPECT().UpdateStack(gomock.Any(), gomock.Any()).Do(func(x, y interface{}) {
 		observedStackName := x.(string)
@@ -923,7 +1067,7 @@ func TestClusterScale(t *testing.T) {
 		assert.NoError(t, err, "Unexpected error on scale.")
 		_, err = cfnParams.GetParameter("SomeParam2")
 		assert.NoError(t, err, "Unexpected error on scale.")
-		param, err := cfnParams.GetParameter(cloudformation.ParameterKeyAsgMaxSize)
+		param, err := cfnParams.GetParameter(ParameterKeyAsgMaxSize)
 		assert.NoError(t, err, "Unexpected error on scale.")
 		assert.Equal(t, "1", aws.StringValue(param.ParameterValue))
 	}).Return("", nil)
@@ -934,31 +1078,45 @@ func TestClusterScale(t *testing.T) {
 	flagSet.String(flags.AsgMaxSizeFlag, "1", "")
 
 	context := cli.NewContext(nil, flagSet, nil)
-	err := scaleCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = scaleCluster(context, awsClients, commandConfig)
 	assert.NoError(t, err, "Unexpected error scaling cluster")
 }
 
 func TestClusterScaleWithoutIamCapability(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.String(flags.AsgMaxSizeFlag, "1", "")
 
 	context := cli.NewContext(nil, flagSet, nil)
-	err := scaleCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = scaleCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error scaling cluster when iam capability is not specified")
 }
 
 func TestClusterScaleWithoutSize(t *testing.T) {
 	defer os.Clearenv()
-	mockECS, mockCloudformation := setupTest(t)
+	mockECS, mockCloudformation, mockSSM := setupTest(t)
+	awsClients := &AWSClients{mockECS, mockCloudformation, mockSSM}
 
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	flagSet.Bool(flags.CapabilityIAMFlag, true, "")
 
 	context := cli.NewContext(nil, flagSet, nil)
-	err := scaleCluster(context, newMockReadWriter(), mockECS, mockCloudformation)
+	rdwr := newMockReadWriter()
+	commandConfig, err := newCommandConfig(context, rdwr)
+	assert.NoError(t, err, "Unexpected error creating CommandConfig")
+
+	err = scaleCluster(context, awsClients, commandConfig)
 	assert.Error(t, err, "Expected error scaling cluster when size is not specified")
 }
 
@@ -970,16 +1128,15 @@ func TestClusterPSTaskGetInfoFail(t *testing.T) {
 	testSession, err := session.NewSession()
 	assert.NoError(t, err, "Unexpected error in creating session")
 
-	newCliParams = func(context *cli.Context, rdwr config.ReadWriter) (*config.CLIParams, error) {
-		return &config.CLIParams{
+	newCommandConfig = func(context *cli.Context, rdwr config.ReadWriter) (*config.CommandConfig, error) {
+		return &config.CommandConfig{
 			Cluster: clusterName,
 			Session: testSession,
 		}, nil
 	}
 	defer os.Clearenv()
-	mockECS, _ := setupTest(t)
+	mockECS, _, _ := setupTest(t)
 
-	mockECS.EXPECT().Initialize(gomock.Any())
 	mockECS.EXPECT().IsActiveCluster(gomock.Any()).Return(true, nil)
 	mockECS.EXPECT().GetTasksPages(gomock.Any(), gomock.Any()).Do(func(x, y interface{}) {
 	}).Return(errors.New("error"))
@@ -987,7 +1144,7 @@ func TestClusterPSTaskGetInfoFail(t *testing.T) {
 	flagSet := flag.NewFlagSet("ecs-cli-down", 0)
 
 	context := cli.NewContext(nil, flagSet, nil)
-	_, err = clusterPS(context, newMockReadWriter(), mockECS)
+	_, err = clusterPS(context, newMockReadWriter())
 	assert.Error(t, err, "Expected error in cluster ps")
 }
 
@@ -995,15 +1152,25 @@ func TestClusterPSTaskGetInfoFail(t *testing.T) {
 // private methods //
 /////////////////////
 
-func mocksForSuccessfulClusterUp(mockECS *mock_ecs.MockECSClient, mockCloudformation *mock_cloudformation.MockCloudformationClient) {
+func amiMetadata(imageID string) *ssm.AMIMetadata {
+	return &ssm.AMIMetadata{
+		ImageID:        imageID,
+		OsName:         "Amazon Linux",
+		AgentVersion:   "1.7.2",
+		RuntimeVersion: "Docker version 17.12.1-ce",
+	}
+}
+
+func mocksForSuccessfulClusterUp(mockECS *mock_ecs.MockECSClient, mockCloudformation *mock_cloudformation.MockCloudformationClient, mockSSM *mock_ssm.MockClient) {
 	gomock.InOrder(
-		mockECS.EXPECT().Initialize(gomock.Any()),
 		mockECS.EXPECT().CreateCluster(clusterName).Return(clusterName, nil),
 	)
 	gomock.InOrder(
-		mockCloudformation.EXPECT().Initialize(gomock.Any()),
+		mockSSM.EXPECT().GetRecommendedECSLinuxAMI().Return(amiMetadata(amiID), nil),
+	)
+	gomock.InOrder(
 		mockCloudformation.EXPECT().ValidateStackExists(stackName).Return(errors.New("error")),
-		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, gomock.Any()).Return("", nil),
+		mockCloudformation.EXPECT().CreateStack(gomock.Any(), stackName, true, gomock.Any()).Return("", nil),
 		mockCloudformation.EXPECT().WaitUntilCreateComplete(stackName).Return(nil),
 	)
 }

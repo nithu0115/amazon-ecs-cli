@@ -37,7 +37,7 @@ func TestPopulateContext(t *testing.T) {
 	globalContext := cli.NewContext(nil, globalSet, nil)
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	cliContext := cli.NewContext(nil, flagSet, globalContext)
-	ecsContext := &context.Context{}
+	ecsContext := &context.ECSContext{}
 
 	// Create a temprorary directory for the dummy ecs config
 	tempDirName, err := ioutil.TempDir("", "test")
@@ -58,7 +58,7 @@ func TestPopulateContext(t *testing.T) {
 		t.Fatal("Error while populating the context")
 	}
 
-	if ecsContext.CLIParams == nil {
+	if ecsContext.CommandConfig == nil {
 		t.Error("CLI Params was expected to be set for ecsContext but was nil")
 	}
 }
@@ -109,7 +109,7 @@ func TestPopulateContextWithGlobalFlagOverrides(t *testing.T) {
 	parentContext := cli.NewContext(nil, overrides, nil)
 	flagSet := flag.NewFlagSet("ecs-cli-up", 0)
 	cliContext := cli.NewContext(nil, flagSet, parentContext)
-	ecsContext := &context.Context{}
+	ecsContext := &context.ECSContext{}
 
 	tempDirName, err := ioutil.TempDir("", "test")
 	if err != nil {
